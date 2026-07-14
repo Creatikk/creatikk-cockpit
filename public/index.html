@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Cockpit Creatikk</title>
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#05060f">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<style>
+  :root{--bg:#05060f;--bg2:#080b1c;--card:#0d1230;--line:#1e2444;--line2:#2a3157;
+    --ink:#eef0fb;--muted:#9aa0c4;--faint:#646a92;--cyan:#00bbf7;--purple:#9b5cff;
+    --grad:linear-gradient(90deg,#00bbf7,#9b5cff);--good:#25d0a5;--warn:#f6b53d;--crit:#ff5c7a;
+    --sans:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:radial-gradient(1200px 600px at 12% -10%,rgba(0,187,247,.10),transparent 60%),
+      radial-gradient(1000px 500px at 100% 0,rgba(155,92,255,.10),transparent 55%),var(--bg);
+    color:var(--ink);font-family:var(--sans);-webkit-font-smoothing:antialiased;
+    padding:max(18px,env(safe-area-inset-top)) 15px 60px;line-height:1.45}
+  .wrap{max-width:1040px;margin:0 auto}
+  .tnum{font-variant-numeric:tabular-nums}
+  .top{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+  .brand{display:flex;align-items:center;gap:10px}
+  .dot{width:10px;height:10px;border-radius:50%;background:var(--good);box-shadow:0 0 0 4px rgba(37,208,165,.16);animation:pulse 2.4s infinite}
+  @keyframes pulse{50%{box-shadow:0 0 0 8px rgba(37,208,165,0)}}
+  @media(prefers-reduced-motion){.dot{animation:none}}
+  h1{font-size:19px;font-weight:800;letter-spacing:-.3px}h1 span{color:var(--cyan)}
+  .fresh{font-size:11.5px;color:var(--faint)}
+  /* toggle fenêtre */
+  .seg{display:inline-flex;background:#0a0e24;border:1px solid var(--line);border-radius:11px;padding:3px;margin:18px 0 4px}
+  .seg button{background:none;border:0;color:var(--muted);font:inherit;font-size:13px;font-weight:700;
+    padding:7px 15px;border-radius:8px;cursor:pointer}
+  .seg button.on{background:var(--grad);color:#06121e}
+  .win{font-size:12px;color:var(--faint);margin:8px 2px 14px}
+  /* kpi */
+  .kpis{display:grid;grid-template-columns:repeat(5,1fr);gap:11px}
+  @media(max-width:900px){.kpis{grid-template-columns:repeat(2,1fr)}}
+  .kpi{background:linear-gradient(180deg,var(--card),var(--bg2));border:1px solid var(--line);border-radius:14px;padding:14px 15px;position:relative;overflow:hidden}
+  .kpi::before{content:"";position:absolute;inset:0 0 auto 0;height:2px;background:var(--grad);opacity:.65}
+  .kpi.hero{grid-column:span 1}
+  .kpi .lab{font-size:11px;color:var(--muted);font-weight:600}
+  .kpi .val{font-size:25px;font-weight:800;letter-spacing:-.5px;margin-top:7px;line-height:1}
+  .kpi .val small{font-size:13px;color:var(--faint);font-weight:700}
+  .kpi .note{font-size:11px;margin-top:6px;color:var(--faint)}
+  .kpi.crit .val{color:var(--crit)}.kpi.good .val{color:var(--good)}
+  .eye{font-size:11px;font-weight:700;letter-spacing:1.2px;text-transform:uppercase;color:var(--faint);margin:26px 0 12px;display:flex;align-items:center;gap:9px}
+  .eye::after{content:"";flex:1;height:1px;background:linear-gradient(90deg,var(--line2),transparent)}
+  /* état live */
+  .live{display:grid;grid-template-columns:repeat(4,1fr);gap:11px}
+  @media(max-width:900px){.live{grid-template-columns:repeat(2,1fr)}}
+  .st{background:var(--card);border:1px solid var(--line);border-radius:13px;padding:13px 14px}
+  .st .l{font-size:11px;color:var(--muted);font-weight:600}
+  .st .v{font-size:22px;font-weight:800;margin-top:5px;letter-spacing:-.4px}
+  .st .s{font-size:11px;color:var(--faint);margin-top:3px}
+  /* sparkline */
+  .panel{background:linear-gradient(180deg,var(--card),var(--bg2));border:1px solid var(--line);border-radius:15px;padding:16px 17px;margin-top:12px}
+  .panel h3{font-size:13px;font-weight:700;margin-bottom:14px;display:flex;justify-content:space-between}
+  .panel h3 em{font-style:normal;color:var(--faint);font-size:11.5px;font-weight:600}
+  .bars{display:flex;align-items:flex-end;gap:3px;height:90px}
+  .bars .b{flex:1;background:var(--grad);opacity:.85;border-radius:3px 3px 1px 1px;min-height:2px}
+  .alert{display:flex;align-items:center;gap:10px;background:rgba(255,92,122,.08);border:1px solid rgba(255,92,122,.3);border-radius:12px;padding:12px 14px;margin-top:14px;font-size:13px;color:#ffd3dc}
+  .alert.warn{background:rgba(246,181,61,.08);border-color:rgba(246,181,61,.3);color:#ffe6b8}
+  .foot{margin-top:26px;text-align:center;color:var(--faint);font-size:11px;line-height:1.7}
+  .load{text-align:center;color:var(--faint);padding:40px;font-size:14px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top">
+    <div class="brand"><span class="dot"></span><h1>Cockpit <span>Creatikk</span></h1></div>
+    <div class="fresh" id="fresh">chargement…</div>
+  </div>
+
+  <div id="app"><div class="load">⏳ Connexion à Stripe…<br><span style="font-size:12px">(le 1er chargement prend ~30 s)</span></div></div>
+
+  <div class="foot">
+    Données Stripe en direct · rafraîchies toutes les 3 min.<br>
+    <span id="alerts-note"></span>
+  </div>
+</div>
+
+<script>
+const F = new Intl.NumberFormat('fr-FR');
+let win = 'today';
+const WINLABEL = { today: "aujourd'hui", d7: '7 derniers jours', d30: '30 derniers jours' };
+
+function money(n){ return F.format(Math.round(n)) + ' €'; }
+
+function render(d){
+  const w = d[win];
+  const L = d.live;
+  const app = document.getElementById('app');
+  // alertes
+  let alerts = '';
+  if (L.canceling > 0) alerts += `<div class="alert">⚠️ <b>${L.canceling} abonnés</b> ont déjà cliqué « annuler » — soit <b>${money(d.mrrLost)}/mois</b> qui partent. Relance-les.</div>`;
+  if (d.today.cancels > d.today.news && (d.today.cancels||d.today.news)) alerts += `<div class="alert warn">📉 Aujourd'hui tu perds plus (−${d.today.cancels}) que tu ne gagnes (+${d.today.news}).</div>`;
+
+  // trafic (PostHog)
+  let trafficHtml = '';
+  const t = d.traffic ? d.traffic[win] : null;
+  if (t){
+    const rate = t.tunnelStart ? Math.round(t.reachedProduct/t.tunnelStart*100) : null;
+    trafficHtml = `
+    <div class="eye">Trafic &amp; tunnel · ${WINLABEL[win]}</div>
+    <div class="live">
+      <div class="st"><div class="l">🌐 Visites</div><div class="v tnum">${F.format(t.visits)}</div><div class="s">${F.format(t.visitors)} visiteur${t.visitors>1?'s':''}</div></div>
+      <div class="st"><div class="l">🚪 Entrées tunnel</div><div class="v tnum">${F.format(t.tunnelStart)}</div><div class="s">début du parcours</div></div>
+      <div class="st"><div class="l">✅ Arrivés au produit</div><div class="v tnum">${F.format(t.reachedProduct)}</div><div class="s">${rate!==null?rate+'% du tunnel':'—'}</div></div>
+      <div class="st"><div class="l">🎬 1res vidéos</div><div class="v tnum">${F.format(t.firstVideo)}</div><div class="s">activation</div></div>
+    </div>
+    <div style="font-size:11px;color:var(--faint);margin-top:8px">PostHog · quasi vide avant le lancement (navigation de test) — se remplira tout seul.</div>`;
+  }
+  const maxS = Math.max(1, ...d.spark.map(s=>s.v));
+  const bars = d.spark.map(s=>`<div class="b" style="height:${Math.max(2,Math.round(s.v/maxS*100))}%" title="${s.d}: ${money(s.v)}"></div>`).join('');
+
+  app.innerHTML = `
+    <div class="seg">
+      <button data-w="today" class="${win==='today'?'on':''}">Aujourd'hui</button>
+      <button data-w="d7" class="${win==='d7'?'on':''}">7 jours</button>
+      <button data-w="d30" class="${win==='d30'?'on':''}">30 jours</button>
+    </div>
+    <div class="win">Fenêtre : <b style="color:var(--muted)">${WINLABEL[win]}</b></div>
+
+    <div class="kpis">
+      <div class="kpi good"><div class="lab">💶 Ventes</div><div class="val tnum">${money(w.rev)}</div><div class="note">${w.sales} paiement${w.sales>1?'s':''}</div></div>
+      <div class="kpi"><div class="lab">🆕 Nouveaux abonnés</div><div class="val tnum">+${w.news}</div><div class="note">${WINLABEL[win]}</div></div>
+      <div class="kpi ${w.cancels>w.news?'crit':''}"><div class="lab">📉 Résiliations</div><div class="val tnum">−${w.cancels}</div><div class="note">${WINLABEL[win]}</div></div>
+      <div class="kpi"><div class="lab">🔄 Net</div><div class="val tnum">${(w.news-w.cancels)>=0?'+':''}${w.news-w.cancels}</div><div class="note">nouveaux − partis</div></div>
+      <div class="kpi ${w.fails>0?'crit':''}"><div class="lab">❌ Paiements échoués</div><div class="val tnum">${w.fails}</div><div class="note">${WINLABEL[win]}</div></div>
+    </div>
+
+    ${alerts}
+
+    <div class="eye">État actuel · en temps réel</div>
+    <div class="live">
+      <div class="st"><div class="l">📈 MRR</div><div class="v tnum">${money(L.mrr)}</div><div class="s">ARR ${money(L.arr)}</div></div>
+      <div class="st"><div class="l">🔄 Abonnés actifs</div><div class="v tnum">${F.format(L.active)}</div><div class="s">ARPU ${L.arpu} €</div></div>
+      <div class="st"><div class="l">⚠️ En résiliation</div><div class="v tnum" style="color:var(--warn)">${L.canceling}</div><div class="s">${money(d.mrrLost)}/m qui partent</div></div>
+      <div class="st"><div class="l">⏳ Retard paiement</div><div class="v tnum">${L.pastDue}</div><div class="s">à relancer (dunning)</div></div>
+    </div>
+
+    ${trafficHtml}
+
+    <div class="panel">
+      <h3>Revenu · 30 derniers jours <em>${money(d.d30.rev)} au total</em></h3>
+      <div class="bars">${bars}</div>
+    </div>
+  `;
+  document.querySelectorAll('.seg button').forEach(b=>b.onclick=()=>{win=b.dataset.w;render(window._d);});
+}
+
+async function load(){
+  try{
+    const r = await fetch('api/data',{cache:'no-store'});
+    const j = await r.json();
+    const fresh = document.getElementById('fresh');
+    if (j.loading){ fresh.textContent='Stripe se charge…'; setTimeout(load,4000); return; }
+    if (j.error && !j.data){ document.getElementById('app').innerHTML=`<div class="load">⚠️ ${j.hasKey?'Erreur Stripe : '+j.error:'Clé Stripe manquante côté serveur.'}</div>`; return; }
+    if (!j.data){ setTimeout(load,4000); return; }
+    window._d = j.data;
+    render(j.data);
+    const mins = Math.round(j.ageMs/60000);
+    fresh.textContent = 'à jour · il y a ' + (mins<1?'<1':mins) + ' min';
+  }catch(e){ document.getElementById('fresh').textContent='hors ligne'; }
+}
+load();
+setInterval(load, 60000); // rafraîchit l'affichage chaque minute
+</script>
+</body>
+</html>
