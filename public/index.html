@@ -119,6 +119,20 @@ function render(d){
     </div>
     <div style="font-size:11px;color:var(--faint);margin-top:8px">PostHog · quasi vide avant le lancement (navigation de test) — se remplira tout seul.</div>`;
   }
+  // coûts IA
+  let costHtml = '';
+  const cw = dayMode ? (d.costDays && d.costDays[win]) : (d.costs && d.costs[win]);
+  if (cw){
+    const claude = +(cw.claude||0);
+    costHtml = `
+    <div class="eye">💸 Coûts IA · ${winLabel(win)}</div>
+    <div class="live">
+      <div class="st"><div class="l">🧠 Claude (cerveau)</div><div class="v tnum">$${claude.toFixed(2)}</div><div class="s">usage Anthropic</div></div>
+      <div class="st" style="opacity:.55"><div class="l">🎬 fal.ai (Studio)</div><div class="v tnum">—</div><div class="s">à brancher</div></div>
+      <div class="st"><div class="l">💰 Total IA</div><div class="v tnum">$${claude.toFixed(2)}</div><div class="s">USD</div></div>
+    </div>
+    <div style="font-size:11px;color:var(--faint);margin-top:8px">Usage Claude de toute l'org (inclut Claude Code/dev + produit). fal.ai à ajouter.</div>`;
+  }
   const maxS = Math.max(1, ...d.spark.map(s=>s.v));
   const bars = d.spark.map(s=>`<div class="b" style="height:${Math.max(2,Math.round(s.v/maxS*100))}%" title="${s.d}: ${money(s.v)}"></div>`).join('');
 
@@ -159,6 +173,8 @@ function render(d){
       <div class="st"><div class="l">↩️ Remboursements</div><div class="v tnum">${money(w.refund)}</div><div class="s">${winLabel(win)}</div></div>
       <div class="st"><div class="l">⚖️ Litiges (chargebacks)</div><div class="v tnum" style="color:${w.disputes>0?'var(--warn)':'var(--ink)'}">${w.disputes}</div><div class="s">${money(w.disputeAmt)} contestés</div></div>
     </div>
+
+    ${costHtml}
 
     ${trafficHtml}
 

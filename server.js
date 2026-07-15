@@ -19,6 +19,10 @@ if (!PH_KEY) {
 }
 const PH_PROJECT = process.env.POSTHOG_PROJECT || '219725';
 const PH_HOST = process.env.POSTHOG_HOST || 'eu.posthog.com';
+let ANTHROPIC_ADMIN_KEY = process.env.ANTHROPIC_ADMIN_KEY || '';
+if (!ANTHROPIC_ADMIN_KEY) {
+  try { ANTHROPIC_ADMIN_KEY = fs.readFileSync('/private/tmp/claude-501/-Users-julien-Dev-Creatikk/5a7315b3-ef28-4ecf-8333-cabac36b6206/scratchpad/anthropic_admin_key.txt', 'utf8').trim(); } catch (e) {}
+}
 const PARIS_OFFSET_H = 2; // été (CEST). Simplification assumée pour le découpage "jour".
 
 // --- Appel Stripe (GET, pagination) ---
@@ -79,6 +83,30 @@ async function phTraffic(windowClause) {
   const r = await phQuery(q);
   const row = (r && r[0]) || [0, 0, 0, 0, 0];
   return { visits: +row[0] || 0, visitors: +row[1] || 0, tunnelStart: +row[2] || 0, reachedProduct: +row[3] || 0, firstVideo: +row[4] || 0 };
+}
+
+// --- Coûts Anthropic (Claude) — Admin cost_report ---
+function anthropicGet(pathq) {
+  return new Promise((resolve, reject) => {
+    const opts = { host: 'api.anthropic.com', path: '/v1/' + pathq, method: 'GET', headers: { 'x-api-key': ANTHROPIC_ADMIN_KEY, 'anthropic-version': '2023-06-01' } };
+    const req = https.request(opts, (res) => { let d = ''; res.on('data', (c) => (d += c)); res.on('end', () => { try { resolve(JSON.parse(d)); } catch (e) { reject(e); } }); });
+    req.on('error', reject); req.setTimeout(25000, () => req.destroy(new Error('timeout'))); req.end();
+  });
+}
+async function anthropicCostsByDay(startISO) {
+  const byDay = {};
+  let page = '';
+  for (let i = 0; i < 8; i++) {
+    const d = await anthropicGet(`organizations/cost_report?starting_at=${encodeURIComponent(startISO)}&limit=31${page ? '&page=' + encodeURIComponent(page) : ''}`);
+    if (!d || !d.data) break;
+    for (const bucket of d.data) {
+      const day = (bucket.starting_at || '').slice(0, 10);
+      let s = 0; for (const r of (bucket.results || [])) s += parseFloat(r.amount || 0);
+      byDay[day] = (byDay[day] || 0) + s;
+    }
+    if (!d.has_more) break; page = d.next_page;
+  }
+  return byDay;
 }
 
 // --- Bornes de temps (jour Paris) ---
@@ -218,6 +246,31 @@ async function refresh() {
       } catch (e) { console.log('posthog ERR', String(e && e.message || e)); }
     }
 
+    // --- Coûts IA (Claude via Anthropic) par jour + par fenêtre ---
+    let costDays = null, costs = null;
+    if (ANTHROPIC_ADMIN_KEY) {
+      try {
+        const startISO = new Date((T.d30 - 3 * 86400) * 1000).toISOString();
+        const claudeByDay = await anthropicCostsByDay(startISO);
+        costDays = {};
+        for (const key of Object.keys(days)) costDays[key] = { claude: +(claudeByDay[key] || 0).toFixed(2), total: +(claudeByDay[key] || 0).toFixed(2) };
+        const sumWin = (from) => {
+          let c = 0;
+          for (const [day, v] of Object.entries(claudeByDay)) {
+            const ts = Date.parse(day + 'T00:00:00Z') / 1000;
+            if (ts >= from - 86400) c += v;
+          }
+          return +c.toFixed(2);
+        };
+        costs = {
+          today: { claude: +(claudeByDay[dk(T.now)] || 0).toFixed(2) },
+          d7: { claude: sumWin(T.d7) },
+          d30: { claude: sumWin(T.d30) },
+          currency: 'USD',
+        };
+      } catch (e) { console.log('anthropic cost ERR', String(e && e.message || e)); }
+    }
+
     const winData = (k, from) => ({
       rev: Math.round(pay[k].rev),
       sales: pay[k].ok,
@@ -247,6 +300,8 @@ async function refresh() {
         d7: winData('d7', T.d7),
         d30: winData('d30', T.d30),
         days,
+        costs,
+        costDays,
         minDay: dk(T.now - 34 * 86400),
         maxDay: dk(T.now),
         spark,
