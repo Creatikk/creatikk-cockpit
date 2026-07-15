@@ -266,7 +266,8 @@ async function refresh() {
     for (const inv of invoices) {
       if (inv.currency !== 'eur') continue;
       const amt = (inv.amount_paid || 0) / 100;
-      const isNew = inv.billing_reason === 'subscription_create' || inv.billing_reason === 'manual';
+      if (amt <= 0) continue; // une facture à 0€ n'est pas une vente (coupon/prorata/downsell)
+      const isNew = inv.billing_reason === 'subscription_create';
       const isRenew = inv.billing_reason === 'subscription_cycle';
       for (const k of Object.keys(W)) if (inv.created >= W[k]) {
         if (isNew) { split[k].newN++; split[k].newRev += amt; }
@@ -328,8 +329,10 @@ async function refresh() {
     }
     for (const inv of invoices) {
       if (inv.currency !== 'eur') continue;
-      const amt = (inv.amount_paid || 0) / 100, g = dget(dk(inv.created));
-      if (inv.billing_reason === 'subscription_create' || inv.billing_reason === 'manual') { g.newSales++; g.newRev += amt; }
+      const amt = (inv.amount_paid || 0) / 100;
+      if (amt <= 0) continue; // facture à 0€ = pas une vente
+      const g = dget(dk(inv.created));
+      if (inv.billing_reason === 'subscription_create') { g.newSales++; g.newRev += amt; }
       else if (inv.billing_reason === 'subscription_cycle') { g.renews++; g.renRev += amt; }
     }
     for (const dd of disputes) { const g = dget(dk(dd.created)); g.disputes++; g.disputeAmt += (dd.amount || 0) / 100; }
