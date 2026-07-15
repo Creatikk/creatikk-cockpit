@@ -24,6 +24,11 @@ if (!ANTHROPIC_ADMIN_KEY) {
   try { ANTHROPIC_ADMIN_KEY = fs.readFileSync('/private/tmp/claude-501/-Users-julien-Dev-Creatikk/5a7315b3-ef28-4ecf-8333-cabac36b6206/scratchpad/anthropic_admin_key.txt', 'utf8').trim(); } catch (e) {}
 }
 const EUR_PER_USD = +(process.env.EUR_PER_USD || 0.92); // conversion coûts IA (USD) → € pour la marge
+// Coûts fixes mensuels (€/mois) : env JSON, ex {"Render":7,"Vercel":20,"Loops":49}
+let MONTHLY_COSTS = {};
+try { MONTHLY_COSTS = JSON.parse(process.env.MONTHLY_COSTS || '{}'); } catch (e) { MONTHLY_COSTS = {}; }
+const MONTHLY_TOTAL = Object.values(MONTHLY_COSTS).reduce((a, b) => a + (+b || 0), 0);
+const DAYS_MO = 30.44;
 const PARIS_OFFSET_H = 2; // été (CEST). Simplification assumée pour le découpage "jour".
 
 // --- Appel Stripe (GET, pagination) ---
@@ -231,6 +236,10 @@ async function refresh() {
       }
     } catch (e) { console.log('claude cost ERR', String(e && e.message || e)); }
 
+    // --- Coûts fixes mensuels répartis par jour/fenêtre ---
+    const fixedDay = MONTHLY_TOTAL / DAYS_MO;
+    const fixedWin = { today: fixedDay, d7: fixedDay * 7, d30: MONTHLY_TOTAL };
+
     // --- Détail JOUR PAR JOUR (35 derniers jours) pour le sélecteur de date ---
     const dk = (ts) => new Date((ts + PARIS_OFFSET_H * 3600) * 1000).toISOString().slice(0, 10);
     const dayAgg = {};
@@ -265,7 +274,8 @@ async function refresh() {
         disputes: g.disputes || 0, disputeAmt: Math.round(dispAmt),
         stripeFee: Math.round(feeByDay[key] || 0),
         aiClaude: +((claudeEurByDay[key] || 0)).toFixed(2),
-        margin: Math.round(rev - refund - dispAmt - (feeByDay[key] || 0) - (claudeEurByDay[key] || 0)),
+        fixedCost: Math.round(fixedDay),
+        margin: Math.round(rev - refund - dispAmt - (feeByDay[key] || 0) - (claudeEurByDay[key] || 0) - fixedDay),
       };
     }
 
@@ -302,7 +312,8 @@ async function refresh() {
       disputes: disp[k].n, disputeAmt: Math.round(disp[k].amt),
       stripeFee: Math.round(feeWin[k]),
       aiClaude: +(claudeWin[k]).toFixed(2),
-      margin: Math.round(pay[k].rev - pay[k].refund - disp[k].amt - feeWin[k] - claudeWin[k]),
+      fixedCost: Math.round(fixedWin[k]),
+      margin: Math.round(pay[k].rev - pay[k].refund - disp[k].amt - feeWin[k] - claudeWin[k] - fixedWin[k]),
     });
 
     CACHE = {
@@ -320,6 +331,8 @@ async function refresh() {
         d7: winData('d7', T.d7),
         d30: winData('d30', T.d30),
         days,
+        monthlyCosts: MONTHLY_COSTS,
+        monthlyTotal: MONTHLY_TOTAL,
         minDay: dk(T.now - 34 * 86400),
         maxDay: dk(T.now),
         spark,
