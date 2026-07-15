@@ -267,16 +267,19 @@ setInterval(refresh, 3 * 60 * 1000);
 
 // --- Serveur ---
 const COCKPIT_PASSWORD = process.env.COCKPIT_PASSWORD || '';
+const COCKPIT_TOKEN = process.env.COCKPIT_TOKEN || ''; // accès machine (digest quotidien) : /api/data?token=...
 const server = http.createServer((req, res) => {
-  // Protection par mot de passe (si COCKPIT_PASSWORD défini). User = "creatikk".
-  if (COCKPIT_PASSWORD) {
+  const q = new URL(req.url, 'http://x');
+  const tokenOk = COCKPIT_TOKEN && q.searchParams.get('token') === COCKPIT_TOKEN;
+  // Protection par mot de passe (si COCKPIT_PASSWORD défini). User = "creatikk". Le jeton machine contourne.
+  if (COCKPIT_PASSWORD && !tokenOk) {
     const expected = 'Basic ' + Buffer.from('creatikk:' + COCKPIT_PASSWORD).toString('base64');
     if ((req.headers.authorization || '') !== expected) {
       res.writeHead(401, { 'WWW-Authenticate': 'Basic realm="Cockpit Creatikk"' });
       res.end('Accès protégé'); return;
     }
   }
-  if (req.url.startsWith('/api/data')) {
+  if (q.pathname === '/api/data') {
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
     res.end(JSON.stringify({ ...CACHE, ageMs: Date.now() - CACHE.at, hasKey: !!STRIPE_KEY }));
     return;
