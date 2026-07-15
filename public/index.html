@@ -94,13 +94,13 @@ function render(d){
   // alertes
   let alerts = '';
   if (L.canceling > 0) alerts += `<div class="alert">⚠️ <b>${L.canceling} abonnés</b> ont déjà cliqué « annuler » — soit <b>${money(d.mrrLost)}/mois</b> qui partent. Relance-les.</div>`;
-  if (d.today.cancels > d.today.news && (d.today.cancels||d.today.news)) alerts += `<div class="alert warn">📉 Aujourd'hui tu perds plus (−${d.today.cancels}) que tu ne gagnes (+${d.today.news}).</div>`;
+  if (win==='today' && d.today.cancels > d.today.news && (d.today.cancels||d.today.news)) alerts += `<div class="alert warn">📉 Aujourd'hui tu perds plus (−${d.today.cancels}) que tu ne gagnes (+${d.today.news}).</div>`;
 
   // trafic (PostHog)
   let trafficHtml = '';
   const t = d.traffic ? d.traffic[win] : null;
   if (t){
-    const rate = t.tunnelStart ? Math.round(t.reachedProduct/t.tunnelStart*100) : null;
+    const rate = t.tunnelStart ? Math.min(100, Math.round(t.reachedProduct/t.tunnelStart*100)) : null;
     trafficHtml = `
     <div class="eye">Trafic &amp; tunnel · ${WINLABEL[win]}</div>
     <div class="live">
