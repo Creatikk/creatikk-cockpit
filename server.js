@@ -32,9 +32,10 @@ if (!OPENAI_ADMIN_KEY) {
   try { OPENAI_ADMIN_KEY = fs.readFileSync('/private/tmp/claude-501/-Users-julien-Dev-Creatikk/5a7315b3-ef28-4ecf-8333-cabac36b6206/scratchpad/openai_admin_key.txt', 'utf8').trim(); } catch (e) {}
 }
 const EUR_PER_USD = +(process.env.EUR_PER_USD || 0.92); // conversion coûts IA (USD) → € pour la marge
-// Coûts fixes mensuels (€/mois) : env JSON, ex {"Render":7,"Vercel":20,"Loops":49}
+// Coûts fixes mensuels (€/mois) : env JSON, ex {"Render":7,"Vercel":20,"Loops":49}.
+// Défaut = Google/Gemini (moyenne factures Google Cloud mars-juin ≈ 34€/mois ; Google n'a pas d'API de coût simple). Surchargeable via env.
 let MONTHLY_COSTS = {};
-try { MONTHLY_COSTS = JSON.parse(process.env.MONTHLY_COSTS || '{}'); } catch (e) { MONTHLY_COSTS = {}; }
+try { MONTHLY_COSTS = JSON.parse(process.env.MONTHLY_COSTS || '{"Google/Gemini":34}'); } catch (e) { MONTHLY_COSTS = { 'Google/Gemini': 34 }; }
 const MONTHLY_TOTAL = Object.values(MONTHLY_COSTS).reduce((a, b) => a + (+b || 0), 0);
 const DAYS_MO = 30.44;
 const PARIS_OFFSET_H = 2; // été (CEST). Simplification assumée pour le découpage "jour".
