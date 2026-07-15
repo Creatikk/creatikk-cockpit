@@ -27,6 +27,10 @@ let FAL_KEY = process.env.FAL_KEY || '';
 if (!FAL_KEY) {
   try { FAL_KEY = fs.readFileSync('/private/tmp/claude-501/-Users-julien-Dev-Creatikk/5a7315b3-ef28-4ecf-8333-cabac36b6206/scratchpad/fal_key.txt', 'utf8').trim(); } catch (e) {}
 }
+let OPENAI_ADMIN_KEY = process.env.OPENAI_ADMIN_KEY || '';
+if (!OPENAI_ADMIN_KEY) {
+  try { OPENAI_ADMIN_KEY = fs.readFileSync('/private/tmp/claude-501/-Users-julien-Dev-Creatikk/5a7315b3-ef28-4ecf-8333-cabac36b6206/scratchpad/openai_admin_key.txt', 'utf8').trim(); } catch (e) {}
+}
 const EUR_PER_USD = +(process.env.EUR_PER_USD || 0.92); // conversion coûts IA (USD) → € pour la marge
 // Coûts fixes mensuels (€/mois) : env JSON, ex {"Render":7,"Vercel":20,"Loops":49}
 let MONTHLY_COSTS = {};
@@ -151,6 +155,30 @@ async function falCostByDay(start, end) {
   return byDay;
 }
 
+// --- Coût OpenAI (organization/costs, champ amount.value) ---
+function openaiGet(pathq) {
+  return new Promise((resolve, reject) => {
+    const opts = { host: 'api.openai.com', path: '/v1/' + pathq, method: 'GET', headers: { Authorization: 'Bearer ' + OPENAI_ADMIN_KEY } };
+    const req = https.request(opts, (res) => { let d = ''; res.on('data', (c) => (d += c)); res.on('end', () => { try { resolve(JSON.parse(d)); } catch (e) { reject(e); } }); });
+    req.on('error', reject); req.setTimeout(30000, () => req.destroy(new Error('openai timeout'))); req.end();
+  });
+}
+async function openaiCostByDay(startUnix) {
+  if (!OPENAI_ADMIN_KEY) return null;
+  const byDay = {}; let page = '';
+  for (let i = 0; i < 6; i++) {
+    const d = await openaiGet(`organization/costs?start_time=${startUnix}&bucket_width=1d&limit=62${page ? '&page=' + page : ''}`);
+    if (!d || !d.data) break;
+    for (const b of d.data) {
+      const day = new Date((b.start_time || 0) * 1000).toISOString().slice(0, 10); let c = 0;
+      for (const r of (b.results || [])) c += parseFloat((r.amount || {}).value || 0);
+      byDay[day] = (byDay[day] || 0) + c; // USD
+    }
+    if (!d.has_more) break; page = d.next_page;
+  }
+  return byDay;
+}
+
 // --- Bornes de temps (jour Paris) ---
 function dayStartsUTC() {
   const now = Date.now() / 1000;
@@ -178,7 +206,7 @@ async function refresh() {
     const gte = Math.floor(HIST - 5 * 86400);
     const fmtD = (ts) => new Date(ts * 1000).toISOString().slice(0, 10);
     // Tous les appels indépendants EN PARALLÈLE (temps = le plus lent, pas la somme)
-    const [subs, charges, disputes, invoices, bts, claudeUsd, falUsd] = await Promise.all([
+    const [subs, charges, disputes, invoices, bts, claudeUsd, falUsd, openaiUsd] = await Promise.all([
       paginate('subscriptions', '&status=all'),
       paginate('charges', `&created[gte]=${gte}`),
       paginate('disputes', `&created[gte]=${Math.floor(HIST)}`),
@@ -186,6 +214,7 @@ async function refresh() {
       paginate('balance_transactions', `&created[gte]=${gte}`),
       claudeCostByDay(new Date(HIST * 1000).toISOString()).catch((e) => { console.log('claude cost ERR', e && e.message); return null; }),
       falCostByDay(fmtD(HIST), fmtD(T.now + 2 * 86400)).catch((e) => { console.log('fal cost ERR', e && e.message); return null; }),
+      openaiCostByDay(Math.floor(HIST)).catch((e) => { console.log('openai cost ERR', e && e.message); return null; }),
     ]);
 
     // --- Abonnements / état live ---
@@ -272,6 +301,15 @@ async function refresh() {
       for (const k of Object.keys(W)) if (ts >= W[k] - 86400) falWin[k] += v * EUR_PER_USD;
     }
 
+    // --- Coût OpenAI (déjà chargé : openaiUsd) → € par jour + par fenêtre ---
+    const openaiEurByDay = {};
+    const openaiWin = { today: 0, d7: 0, d30: 0 };
+    if (openaiUsd) for (const [day, v] of Object.entries(openaiUsd)) {
+      openaiEurByDay[day] = v * EUR_PER_USD;
+      const ts = Date.parse(day + 'T00:00:00Z') / 1000;
+      for (const k of Object.keys(W)) if (ts >= W[k] - 86400) openaiWin[k] += v * EUR_PER_USD;
+    }
+
     // --- Coûts fixes mensuels répartis par jour/fenêtre ---
     const fixedDay = MONTHLY_TOTAL / DAYS_MO;
     const fixedWin = { today: fixedDay, d7: fixedDay * 7, d30: MONTHLY_TOTAL };
@@ -311,8 +349,9 @@ async function refresh() {
         stripeFee: Math.round(feeByDay[key] || 0),
         aiClaude: +((claudeEurByDay[key] || 0)).toFixed(2),
         aiFal: +((falEurByDay[key] || 0)).toFixed(2),
+        aiOpenai: +((openaiEurByDay[key] || 0)).toFixed(2),
         fixedCost: Math.round(fixedDay),
-        margin: Math.round(rev - refund - dispAmt - (feeByDay[key] || 0) - (claudeEurByDay[key] || 0) - (falEurByDay[key] || 0) - fixedDay),
+        margin: Math.round(rev - refund - dispAmt - (feeByDay[key] || 0) - (claudeEurByDay[key] || 0) - (falEurByDay[key] || 0) - (openaiEurByDay[key] || 0) - fixedDay),
       };
     }
 
@@ -350,8 +389,9 @@ async function refresh() {
       stripeFee: Math.round(feeWin[k]),
       aiClaude: +(claudeWin[k]).toFixed(2),
       aiFal: +(falWin[k]).toFixed(2),
+      aiOpenai: +(openaiWin[k]).toFixed(2),
       fixedCost: Math.round(fixedWin[k]),
-      margin: Math.round(pay[k].rev - pay[k].refund - disp[k].amt - feeWin[k] - claudeWin[k] - falWin[k] - fixedWin[k]),
+      margin: Math.round(pay[k].rev - pay[k].refund - disp[k].amt - feeWin[k] - claudeWin[k] - falWin[k] - openaiWin[k] - fixedWin[k]),
     });
 
     CACHE = {
