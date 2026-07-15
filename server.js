@@ -164,8 +164,43 @@ async function refresh() {
       }
     }
 
+    // --- Détail JOUR PAR JOUR (35 derniers jours) pour le sélecteur de date ---
+    const dk = (ts) => new Date((ts + PARIS_OFFSET_H * 3600) * 1000).toISOString().slice(0, 10);
+    const dayAgg = {};
+    const dget = (k) => (dayAgg[k] || (dayAgg[k] = { rev: 0, sales: 0, fails: 0, refund: 0, newSales: 0, newRev: 0, renews: 0, renRev: 0, disputes: 0, disputeAmt: 0, news: 0, cancels: 0 }));
+    for (const c of charges) {
+      if (c.currency !== 'eur') continue;
+      const amt = c.amount / 100, ref = (c.amount_refunded || 0) / 100;
+      if (c.status === 'succeeded' && c.paid) { const g = dget(dk(c.created)); g.rev += amt; g.sales++; g.refund += ref; }
+      else if (c.status === 'failed') { dget(dk(c.created)).fails++; }
+    }
+    for (const inv of invoices) {
+      if (inv.currency !== 'eur') continue;
+      const amt = (inv.amount_paid || 0) / 100, g = dget(dk(inv.created));
+      if (inv.billing_reason === 'subscription_create' || inv.billing_reason === 'manual') { g.newSales++; g.newRev += amt; }
+      else if (inv.billing_reason === 'subscription_cycle') { g.renews++; g.renRev += amt; }
+    }
+    for (const dd of disputes) { const g = dget(dk(dd.created)); g.disputes++; g.disputeAmt += (dd.amount || 0) / 100; }
+    for (const s of subs) {
+      if (s.created >= T.d30 - 3 * 86400) dget(dk(s.created)).news++;
+      if (s.canceled_at && s.canceled_at >= T.d30 - 3 * 86400) dget(dk(s.canceled_at)).cancels++;
+    }
+    const days = {};
+    for (let i = 0; i < 35; i++) {
+      const key = dk(T.now - i * 86400), g = dayAgg[key] || {};
+      const rev = g.rev || 0, refund = g.refund || 0, dispAmt = g.disputeAmt || 0, fails = g.fails || 0, sales = g.sales || 0;
+      days[key] = {
+        rev: Math.round(rev), sales, news: g.news || 0, cancels: g.cancels || 0, fails,
+        failRate: (sales + fails) ? Math.round(fails / (sales + fails) * 100) : 0,
+        refund: Math.round(refund), net: Math.round(rev - refund - dispAmt),
+        newSales: g.newSales || 0, newRev: Math.round(g.newRev || 0),
+        renews: g.renews || 0, renRev: Math.round(g.renRev || 0),
+        disputes: g.disputes || 0, disputeAmt: Math.round(dispAmt),
+      };
+    }
+
     // --- Trafic PostHog (non bloquant : si ça échoue, Stripe reste servi) ---
-    let traffic = null;
+    let traffic = null, trafficDays = null;
     if (PH_KEY) {
       try {
         const [tToday, t7, t30] = await Promise.all([
@@ -174,6 +209,12 @@ async function refresh() {
           phTraffic('timestamp > now() - interval 30 day'),
         ]);
         traffic = { today: tToday, d7: t7, d30: t30 };
+        const rows = await phQuery(`SELECT toString(toDate(toTimeZone(timestamp, 'Europe/Paris'))) AS d,
+            countIf(event='$pageview') AS v, uniqIf(person_id, event='$pageview') AS vi,
+            countIf(event='tunnel_started') AS ts, countIf(event='dashboard_opened') AS rp, countIf(event='first_video_created') AS fv
+          FROM events WHERE timestamp > now() - interval 34 day GROUP BY d`);
+        trafficDays = {};
+        for (const r of rows) trafficDays[r[0]] = { visits: +r[1] || 0, visitors: +r[2] || 0, tunnelStart: +r[3] || 0, reachedProduct: +r[4] || 0, firstVideo: +r[5] || 0 };
       } catch (e) { console.log('posthog ERR', String(e && e.message || e)); }
     }
 
@@ -195,6 +236,7 @@ async function refresh() {
       loading: false, error: null, at: Date.now(),
       data: {
         traffic,
+        trafficDays,
         phConnected: !!PH_KEY,
         live: {
           mrr: Math.round(mrr), arr: Math.round(mrr * 12), arpu: +arpu.toFixed(2),
@@ -204,6 +246,9 @@ async function refresh() {
         today: winData('today', T.today),
         d7: winData('d7', T.d7),
         d30: winData('d30', T.d30),
+        days,
+        minDay: dk(T.now - 34 * 86400),
+        maxDay: dk(T.now),
         spark,
         mrrLost: Math.round(computeMRR(canceling)),
       },
