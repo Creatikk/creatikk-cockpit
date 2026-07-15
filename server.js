@@ -164,6 +164,18 @@ async function refresh() {
       }
     }
 
+    // --- Frais Stripe (via balance transactions, en EUR) ---
+    const bts = await paginate('balance_transactions', `&created[gte]=${Math.floor(T.d30 - 5 * 86400)}`);
+    const feeWin = { today: 0, d7: 0, d30: 0 };
+    const feeByDay = {};
+    for (const bt of bts) {
+      if (bt.currency !== 'eur') continue;
+      const fee = (bt.fee || 0) / 100;
+      for (const k of Object.keys(W)) if (bt.created >= W[k]) feeWin[k] += fee;
+      const key = new Date((bt.created + PARIS_OFFSET_H * 3600) * 1000).toISOString().slice(0, 10);
+      feeByDay[key] = (feeByDay[key] || 0) + fee;
+    }
+
     // --- Détail JOUR PAR JOUR (35 derniers jours) pour le sélecteur de date ---
     const dk = (ts) => new Date((ts + PARIS_OFFSET_H * 3600) * 1000).toISOString().slice(0, 10);
     const dayAgg = {};
@@ -196,6 +208,8 @@ async function refresh() {
         newSales: g.newSales || 0, newRev: Math.round(g.newRev || 0),
         renews: g.renews || 0, renRev: Math.round(g.renRev || 0),
         disputes: g.disputes || 0, disputeAmt: Math.round(dispAmt),
+        stripeFee: Math.round(feeByDay[key] || 0),
+        margin: Math.round(rev - refund - dispAmt - (feeByDay[key] || 0)),
       };
     }
 
@@ -230,6 +244,8 @@ async function refresh() {
       newSales: split[k].newN, newRev: Math.round(split[k].newRev),
       renews: split[k].renN, renRev: Math.round(split[k].renRev),
       disputes: disp[k].n, disputeAmt: Math.round(disp[k].amt),
+      stripeFee: Math.round(feeWin[k]),
+      margin: Math.round(pay[k].rev - pay[k].refund - disp[k].amt - feeWin[k]),
     });
 
     CACHE = {
