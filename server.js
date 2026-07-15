@@ -34,6 +34,7 @@ try { MONTHLY_COSTS = JSON.parse(process.env.MONTHLY_COSTS || '{}'); } catch (e)
 const MONTHLY_TOTAL = Object.values(MONTHLY_COSTS).reduce((a, b) => a + (+b || 0), 0);
 const DAYS_MO = 30.44;
 const PARIS_OFFSET_H = 2; // été (CEST). Simplification assumée pour le découpage "jour".
+const HISTORY_DAYS = +(process.env.HISTORY_DAYS || 45); // profondeur d'historique (jours) : détail jour-par-jour + sélecteur de date (au-delà, la zone trial avril-mai ralentit)
 
 // --- Appel Stripe (GET, pagination) ---
 function stripeGet(pathq) {
@@ -172,9 +173,20 @@ let CACHE = { loading: true, error: null, at: 0, data: null };
 
 async function refresh() {
   try {
-    const subs = await paginate('subscriptions', '&status=all');
     const T = dayStartsUTC();
-    const charges = await paginate('charges', `&created[gte]=${Math.floor(T.d30 - 5 * 86400)}`);
+    const HIST = T.now - HISTORY_DAYS * 86400; // début de l'historique
+    const gte = Math.floor(HIST - 5 * 86400);
+    const fmtD = (ts) => new Date(ts * 1000).toISOString().slice(0, 10);
+    // Tous les appels indépendants EN PARALLÈLE (temps = le plus lent, pas la somme)
+    const [subs, charges, disputes, invoices, bts, claudeUsd, falUsd] = await Promise.all([
+      paginate('subscriptions', '&status=all'),
+      paginate('charges', `&created[gte]=${gte}`),
+      paginate('disputes', `&created[gte]=${Math.floor(HIST)}`),
+      paginate('invoices', `&status=paid&created[gte]=${gte}`),
+      paginate('balance_transactions', `&created[gte]=${gte}`),
+      claudeCostByDay(new Date(HIST * 1000).toISOString()).catch((e) => { console.log('claude cost ERR', e && e.message); return null; }),
+      falCostByDay(fmtD(HIST), fmtD(T.now + 2 * 86400)).catch((e) => { console.log('fal cost ERR', e && e.message); return null; }),
+    ]);
 
     // --- Abonnements / état live ---
     const active = subs.filter((s) => s.status === 'active' && !s.cancel_at_period_end);
@@ -211,16 +223,14 @@ async function refresh() {
       spark.push({ d: dk, v: Math.round(dayBuckets[dk] || 0) });
     }
 
-    // --- Litiges / chargebacks (par fenêtre) ---
-    const disputes = await paginate('disputes', `&created[gte]=${Math.floor(T.d30)}`);
+    // --- Litiges / chargebacks (par fenêtre) — disputes déjà chargé en parallèle ---
     const disp = { today: { n: 0, amt: 0 }, d7: { n: 0, amt: 0 }, d30: { n: 0, amt: 0 } };
     for (const d of disputes) {
       const a = (d.amount || 0) / 100;
       for (const k of Object.keys(W)) if (d.created >= W[k]) { disp[k].n++; disp[k].amt += a; }
     }
 
-    // --- Factures : nouvelles ventes vs renouvellements (par fenêtre) ---
-    const invoices = await paginate('invoices', `&status=paid&created[gte]=${Math.floor(T.d30 - 5 * 86400)}`);
+    // --- Factures : nouvelles ventes vs renouvellements (par fenêtre) — invoices déjà chargé ---
     const split = { today: { newN: 0, newRev: 0, renN: 0, renRev: 0 }, d7: { newN: 0, newRev: 0, renN: 0, renRev: 0 }, d30: { newN: 0, newRev: 0, renN: 0, renRev: 0 } };
     for (const inv of invoices) {
       if (inv.currency !== 'eur') continue;
@@ -233,8 +243,7 @@ async function refresh() {
       }
     }
 
-    // --- Frais Stripe (via balance transactions, en EUR) ---
-    const bts = await paginate('balance_transactions', `&created[gte]=${Math.floor(T.d30 - 5 * 86400)}`);
+    // --- Frais Stripe (via balance transactions, en EUR) — bts déjà chargé ---
     const feeWin = { today: 0, d7: 0, d30: 0 };
     const feeByDay = {};
     for (const bt of bts) {
@@ -245,33 +254,23 @@ async function refresh() {
       feeByDay[key] = (feeByDay[key] || 0) + fee;
     }
 
-    // --- Coût Claude (usage réel, en € via EUR_PER_USD) par jour + par fenêtre ---
-    let claudeEurByDay = {};
+    // --- Coût Claude (déjà chargé en parallèle : claudeUsd) → € par jour + par fenêtre ---
+    const claudeEurByDay = {};
     const claudeWin = { today: 0, d7: 0, d30: 0 };
-    try {
-      const startISO = new Date((T.d30 - 3 * 86400) * 1000).toISOString();
-      const usd = await claudeCostByDay(startISO);
-      if (usd) {
-        for (const [day, v] of Object.entries(usd)) {
-          claudeEurByDay[day] = v * EUR_PER_USD;
-          const ts = Date.parse(day + 'T00:00:00Z') / 1000;
-          for (const k of Object.keys(W)) if (ts >= W[k] - 86400) claudeWin[k] += v * EUR_PER_USD;
-        }
-      }
-    } catch (e) { console.log('claude cost ERR', String(e && e.message || e)); }
+    if (claudeUsd) for (const [day, v] of Object.entries(claudeUsd)) {
+      claudeEurByDay[day] = v * EUR_PER_USD;
+      const ts = Date.parse(day + 'T00:00:00Z') / 1000;
+      for (const k of Object.keys(W)) if (ts >= W[k] - 86400) claudeWin[k] += v * EUR_PER_USD;
+    }
 
-    // --- Coût fal.ai (vidéo) par jour + par fenêtre (en €) ---
-    let falEurByDay = {};
+    // --- Coût fal.ai (déjà chargé en parallèle : falUsd) → € par jour + par fenêtre ---
+    const falEurByDay = {};
     const falWin = { today: 0, d7: 0, d30: 0 };
-    try {
-      const fmtD = (ts) => new Date(ts * 1000).toISOString().slice(0, 10);
-      const usd = await falCostByDay(fmtD(T.d30 - 3 * 86400), fmtD(T.now + 2 * 86400));
-      if (usd) for (const [day, v] of Object.entries(usd)) {
-        falEurByDay[day] = v * EUR_PER_USD;
-        const ts = Date.parse(day + 'T00:00:00Z') / 1000;
-        for (const k of Object.keys(W)) if (ts >= W[k] - 86400) falWin[k] += v * EUR_PER_USD;
-      }
-    } catch (e) { console.log('fal cost ERR', String(e && e.message || e)); }
+    if (falUsd) for (const [day, v] of Object.entries(falUsd)) {
+      falEurByDay[day] = v * EUR_PER_USD;
+      const ts = Date.parse(day + 'T00:00:00Z') / 1000;
+      for (const k of Object.keys(W)) if (ts >= W[k] - 86400) falWin[k] += v * EUR_PER_USD;
+    }
 
     // --- Coûts fixes mensuels répartis par jour/fenêtre ---
     const fixedDay = MONTHLY_TOTAL / DAYS_MO;
@@ -295,11 +294,11 @@ async function refresh() {
     }
     for (const dd of disputes) { const g = dget(dk(dd.created)); g.disputes++; g.disputeAmt += (dd.amount || 0) / 100; }
     for (const s of subs) {
-      if (s.created >= T.d30 - 3 * 86400) dget(dk(s.created)).news++;
-      if (s.canceled_at && s.canceled_at >= T.d30 - 3 * 86400) dget(dk(s.canceled_at)).cancels++;
+      if (s.created >= HIST) dget(dk(s.created)).news++;
+      if (s.canceled_at && s.canceled_at >= HIST) dget(dk(s.canceled_at)).cancels++;
     }
     const days = {};
-    for (let i = 0; i < 35; i++) {
+    for (let i = 0; i < HISTORY_DAYS; i++) {
       const key = dk(T.now - i * 86400), g = dayAgg[key] || {};
       const rev = g.rev || 0, refund = g.refund || 0, dispAmt = g.disputeAmt || 0, fails = g.fails || 0, sales = g.sales || 0;
       days[key] = {
@@ -330,7 +329,7 @@ async function refresh() {
         const rows = await phQuery(`SELECT toString(toDate(toTimeZone(timestamp, 'Europe/Paris'))) AS d,
             countIf(event='$pageview') AS v, uniqIf(person_id, event='$pageview') AS vi,
             countIf(event='tunnel_started') AS ts, countIf(event='dashboard_opened') AS rp, countIf(event='first_video_created') AS fv
-          FROM events WHERE timestamp > now() - interval 34 day GROUP BY d`);
+          FROM events WHERE timestamp > now() - interval ${HISTORY_DAYS + 1} day GROUP BY d`);
         trafficDays = {};
         for (const r of rows) trafficDays[r[0]] = { visits: +r[1] || 0, visitors: +r[2] || 0, tunnelStart: +r[3] || 0, reachedProduct: +r[4] || 0, firstVideo: +r[5] || 0 };
       } catch (e) { console.log('posthog ERR', String(e && e.message || e)); }
@@ -372,7 +371,7 @@ async function refresh() {
         days,
         monthlyCosts: MONTHLY_COSTS,
         monthlyTotal: MONTHLY_TOTAL,
-        minDay: dk(T.now - 34 * 86400),
+        minDay: dk(T.now - (HISTORY_DAYS - 1) * 86400),
         maxDay: dk(T.now),
         spark,
         mrrLost: Math.round(computeMRR(canceling)),
