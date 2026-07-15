@@ -23,6 +23,10 @@ let ANTHROPIC_ADMIN_KEY = process.env.ANTHROPIC_ADMIN_KEY || '';
 if (!ANTHROPIC_ADMIN_KEY) {
   try { ANTHROPIC_ADMIN_KEY = fs.readFileSync('/private/tmp/claude-501/-Users-julien-Dev-Creatikk/5a7315b3-ef28-4ecf-8333-cabac36b6206/scratchpad/anthropic_admin_key.txt', 'utf8').trim(); } catch (e) {}
 }
+let FAL_KEY = process.env.FAL_KEY || '';
+if (!FAL_KEY) {
+  try { FAL_KEY = fs.readFileSync('/private/tmp/claude-501/-Users-julien-Dev-Creatikk/5a7315b3-ef28-4ecf-8333-cabac36b6206/scratchpad/fal_key.txt', 'utf8').trim(); } catch (e) {}
+}
 const EUR_PER_USD = +(process.env.EUR_PER_USD || 0.92); // conversion coûts IA (USD) → € pour la marge
 // Coûts fixes mensuels (€/mois) : env JSON, ex {"Render":7,"Vercel":20,"Loops":49}
 let MONTHLY_COSTS = {};
@@ -122,6 +126,26 @@ async function claudeCostByDay(startISO) {
       byDay[day] = (byDay[day] || 0) + c; // USD
     }
     if (!d.has_more) break; page = d.next_page;
+  }
+  return byDay;
+}
+
+// --- Coût fal.ai (models/usage, champ cost = facturation fal) ---
+function falGet(pathq) {
+  return new Promise((resolve, reject) => {
+    const opts = { host: 'api.fal.ai', path: '/v1/' + pathq, method: 'GET', headers: { Authorization: 'Key ' + FAL_KEY } };
+    const req = https.request(opts, (res) => { let d = ''; res.on('data', (c) => (d += c)); res.on('end', () => { try { resolve(JSON.parse(d)); } catch (e) { reject(e); } }); });
+    req.on('error', reject); req.setTimeout(30000, () => req.destroy(new Error('fal timeout'))); req.end();
+  });
+}
+async function falCostByDay(start, end) {
+  if (!FAL_KEY) return null;
+  const d = await falGet(`models/usage?start=${start}&end=${end}&timeframe=day&expand=time_series`);
+  const byDay = {};
+  for (const b of (d.time_series || [])) {
+    const day = (b.bucket || '').slice(0, 10); let c = 0;
+    for (const r of (b.results || [])) c += parseFloat(r.cost || 0);
+    byDay[day] = (byDay[day] || 0) + c; // USD
   }
   return byDay;
 }
@@ -236,6 +260,19 @@ async function refresh() {
       }
     } catch (e) { console.log('claude cost ERR', String(e && e.message || e)); }
 
+    // --- Coût fal.ai (vidéo) par jour + par fenêtre (en €) ---
+    let falEurByDay = {};
+    const falWin = { today: 0, d7: 0, d30: 0 };
+    try {
+      const fmtD = (ts) => new Date(ts * 1000).toISOString().slice(0, 10);
+      const usd = await falCostByDay(fmtD(T.d30 - 3 * 86400), fmtD(T.now + 2 * 86400));
+      if (usd) for (const [day, v] of Object.entries(usd)) {
+        falEurByDay[day] = v * EUR_PER_USD;
+        const ts = Date.parse(day + 'T00:00:00Z') / 1000;
+        for (const k of Object.keys(W)) if (ts >= W[k] - 86400) falWin[k] += v * EUR_PER_USD;
+      }
+    } catch (e) { console.log('fal cost ERR', String(e && e.message || e)); }
+
     // --- Coûts fixes mensuels répartis par jour/fenêtre ---
     const fixedDay = MONTHLY_TOTAL / DAYS_MO;
     const fixedWin = { today: fixedDay, d7: fixedDay * 7, d30: MONTHLY_TOTAL };
@@ -274,8 +311,9 @@ async function refresh() {
         disputes: g.disputes || 0, disputeAmt: Math.round(dispAmt),
         stripeFee: Math.round(feeByDay[key] || 0),
         aiClaude: +((claudeEurByDay[key] || 0)).toFixed(2),
+        aiFal: +((falEurByDay[key] || 0)).toFixed(2),
         fixedCost: Math.round(fixedDay),
-        margin: Math.round(rev - refund - dispAmt - (feeByDay[key] || 0) - (claudeEurByDay[key] || 0) - fixedDay),
+        margin: Math.round(rev - refund - dispAmt - (feeByDay[key] || 0) - (claudeEurByDay[key] || 0) - (falEurByDay[key] || 0) - fixedDay),
       };
     }
 
@@ -312,8 +350,9 @@ async function refresh() {
       disputes: disp[k].n, disputeAmt: Math.round(disp[k].amt),
       stripeFee: Math.round(feeWin[k]),
       aiClaude: +(claudeWin[k]).toFixed(2),
+      aiFal: +(falWin[k]).toFixed(2),
       fixedCost: Math.round(fixedWin[k]),
-      margin: Math.round(pay[k].rev - pay[k].refund - disp[k].amt - feeWin[k] - claudeWin[k] - fixedWin[k]),
+      margin: Math.round(pay[k].rev - pay[k].refund - disp[k].amt - feeWin[k] - claudeWin[k] - falWin[k] - fixedWin[k]),
     });
 
     CACHE = {

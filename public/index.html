@@ -148,11 +148,11 @@ function render(d){
     <div class="live">
       <div class="st"><div class="l">💶 Recettes</div><div class="v tnum">${money(w.rev)}</div><div class="s">${w.newSales} nouv · ${w.renews} renouv</div></div>
       <div class="st"><div class="l">🏦 Frais Stripe</div><div class="v tnum">−${money(w.stripeFee||0)}</div><div class="s">commissions paiement</div></div>
-      <div class="st"><div class="l">🧠 Coût Claude</div><div class="v tnum">−${money(w.aiClaude||0)}</div><div class="s">usage réel</div></div>
+      <div class="st"><div class="l">🤖 Coûts IA</div><div class="v tnum">−${money((w.aiClaude||0)+(w.aiFal||0))}</div><div class="s">🧠 Claude ${money(w.aiClaude||0)} · 🎬 fal ${money(w.aiFal||0)}</div></div>
       <div class="st"><div class="l">🏠 Coûts fixes</div><div class="v tnum">−${money(w.fixedCost||0)}</div><div class="s">${d.monthlyTotal?money(d.monthlyTotal)+'/mois':'à configurer'}</div></div>
       <div class="st"><div class="l">📊 Marge</div><div class="v tnum" style="color:${(w.margin||0)>=0?'var(--good)':'var(--crit)'}">${money(w.margin||0)}</div><div class="s">${w.rev?Math.round((w.margin||0)/w.rev*100):0}% des recettes</div></div>
     </div>
-    <div style="font-size:11px;color:var(--faint);margin-top:8px">Marge = recettes − frais Stripe − remb − litiges − Claude − coûts fixes. ${Object.keys(d.monthlyCosts||{}).length?('Fixes : '+Object.entries(d.monthlyCosts).map(([k,v])=>k+' '+v+'€').join(' · ')):'⚠️ Coûts fixes non configurés.'} <b>Manque encore : fal.ai</b> (vidéo).</div>
+    <div style="font-size:11px;color:var(--faint);margin-top:8px">Marge = recettes − frais Stripe − remb − litiges − coûts IA (Claude+fal) − coûts fixes. ${Object.keys(d.monthlyCosts||{}).length?('Fixes : '+Object.entries(d.monthlyCosts).map(([k,v])=>k+' '+v+'€').join(' · ')):'⚠️ Coûts fixes non configurés (variable MONTHLY_COSTS).'} OpenAI + Google à venir.</div>
 
     <div class="eye">État actuel · en temps réel</div>
     <div class="live">
