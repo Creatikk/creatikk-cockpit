@@ -19,6 +19,11 @@ if (!PH_KEY) {
 }
 const PH_PROJECT = process.env.POSTHOG_PROJECT || '219725';
 const PH_HOST = process.env.POSTHOG_HOST || 'eu.posthog.com';
+let ANTHROPIC_ADMIN_KEY = process.env.ANTHROPIC_ADMIN_KEY || '';
+if (!ANTHROPIC_ADMIN_KEY) {
+  try { ANTHROPIC_ADMIN_KEY = fs.readFileSync('/private/tmp/claude-501/-Users-julien-Dev-Creatikk/5a7315b3-ef28-4ecf-8333-cabac36b6206/scratchpad/anthropic_admin_key.txt', 'utf8').trim(); } catch (e) {}
+}
+const EUR_PER_USD = +(process.env.EUR_PER_USD || 0.92); // conversion coûts IA (USD) → € pour la marge
 const PARIS_OFFSET_H = 2; // été (CEST). Simplification assumée pour le découpage "jour".
 
 // --- Appel Stripe (GET, pagination) ---
@@ -79,6 +84,41 @@ async function phTraffic(windowClause) {
   const r = await phQuery(q);
   const row = (r && r[0]) || [0, 0, 0, 0, 0];
   return { visits: +row[0] || 0, visitors: +row[1] || 0, tunnelStart: +row[2] || 0, reachedProduct: +row[3] || 0, firstVideo: +row[4] || 0 };
+}
+
+// --- Coût Claude (usage_report Anthropic × prix — FIABLE, isole le produit de Claude Code) ---
+function anthropicGet(pathq) {
+  return new Promise((resolve, reject) => {
+    const opts = { host: 'api.anthropic.com', path: '/v1/' + pathq, method: 'GET', headers: { 'x-api-key': ANTHROPIC_ADMIN_KEY, 'anthropic-version': '2023-06-01' } };
+    const req = https.request(opts, (res) => { let d = ''; res.on('data', (c) => (d += c)); res.on('end', () => { try { resolve(JSON.parse(d)); } catch (e) { reject(e); } }); });
+    req.on('error', reject); req.setTimeout(30000, () => req.destroy(new Error('timeout'))); req.end();
+  });
+}
+// prix $/MTok : [input, output, cache_read, cache_write]
+const PRICES = {
+  'claude-opus-4-8': [5, 25, .5, 6.25], 'claude-opus-4-7': [5, 25, .5, 6.25], 'claude-opus-4-6': [5, 25, .5, 6.25],
+  'claude-sonnet-4-6': [3, 15, .3, 3.75], 'claude-sonnet-4-5': [3, 15, .3, 3.75], 'claude-sonnet-5': [3, 15, .3, 3.75],
+  'claude-haiku-4-5': [1, 5, .1, 1.25], 'claude-fable-5': [10, 50, 1, 12.5],
+};
+function priceFor(model) { for (const k in PRICES) if (model && model.startsWith(k)) return PRICES[k]; return [5, 25, .5, 6.25]; }
+async function claudeCostByDay(startISO) {
+  if (!ANTHROPIC_ADMIN_KEY) return null;
+  const byDay = {}; let page = '';
+  for (let i = 0; i < 8; i++) {
+    const d = await anthropicGet(`organizations/usage_report/messages?starting_at=${encodeURIComponent(startISO)}&group_by[]=model&bucket_width=1d&limit=31${page ? '&page=' + encodeURIComponent(page) : ''}`);
+    if (!d || !d.data) break;
+    for (const b of d.data) {
+      const day = (b.starting_at || '').slice(0, 10); let c = 0;
+      for (const r of (b.results || [])) {
+        const [pi, po, pcr, pcw] = priceFor(r.model);
+        let cw = 0; for (const k in r) if (k.includes('cache_creation') && typeof r[k] === 'number') cw += r[k];
+        c += ((r.uncached_input_tokens || 0) * pi + (r.output_tokens || 0) * po + (r.cache_read_input_tokens || 0) * pcr + cw * pcw) / 1e6;
+      }
+      byDay[day] = (byDay[day] || 0) + c; // USD
+    }
+    if (!d.has_more) break; page = d.next_page;
+  }
+  return byDay;
 }
 
 // --- Bornes de temps (jour Paris) ---
@@ -176,6 +216,21 @@ async function refresh() {
       feeByDay[key] = (feeByDay[key] || 0) + fee;
     }
 
+    // --- Coût Claude (usage réel, en € via EUR_PER_USD) par jour + par fenêtre ---
+    let claudeEurByDay = {};
+    const claudeWin = { today: 0, d7: 0, d30: 0 };
+    try {
+      const startISO = new Date((T.d30 - 3 * 86400) * 1000).toISOString();
+      const usd = await claudeCostByDay(startISO);
+      if (usd) {
+        for (const [day, v] of Object.entries(usd)) {
+          claudeEurByDay[day] = v * EUR_PER_USD;
+          const ts = Date.parse(day + 'T00:00:00Z') / 1000;
+          for (const k of Object.keys(W)) if (ts >= W[k] - 86400) claudeWin[k] += v * EUR_PER_USD;
+        }
+      }
+    } catch (e) { console.log('claude cost ERR', String(e && e.message || e)); }
+
     // --- Détail JOUR PAR JOUR (35 derniers jours) pour le sélecteur de date ---
     const dk = (ts) => new Date((ts + PARIS_OFFSET_H * 3600) * 1000).toISOString().slice(0, 10);
     const dayAgg = {};
@@ -209,7 +264,8 @@ async function refresh() {
         renews: g.renews || 0, renRev: Math.round(g.renRev || 0),
         disputes: g.disputes || 0, disputeAmt: Math.round(dispAmt),
         stripeFee: Math.round(feeByDay[key] || 0),
-        margin: Math.round(rev - refund - dispAmt - (feeByDay[key] || 0)),
+        aiClaude: +((claudeEurByDay[key] || 0)).toFixed(2),
+        margin: Math.round(rev - refund - dispAmt - (feeByDay[key] || 0) - (claudeEurByDay[key] || 0)),
       };
     }
 
@@ -245,7 +301,8 @@ async function refresh() {
       renews: split[k].renN, renRev: Math.round(split[k].renRev),
       disputes: disp[k].n, disputeAmt: Math.round(disp[k].amt),
       stripeFee: Math.round(feeWin[k]),
-      margin: Math.round(pay[k].rev - pay[k].refund - disp[k].amt - feeWin[k]),
+      aiClaude: +(claudeWin[k]).toFixed(2),
+      margin: Math.round(pay[k].rev - pay[k].refund - disp[k].amt - feeWin[k] - claudeWin[k]),
     });
 
     CACHE = {

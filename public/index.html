@@ -148,10 +148,10 @@ function render(d){
     <div class="live">
       <div class="st"><div class="l">💶 Recettes</div><div class="v tnum">${money(w.rev)}</div><div class="s">${w.newSales} nouv · ${w.renews} renouv</div></div>
       <div class="st"><div class="l">🏦 Frais Stripe</div><div class="v tnum">−${money(w.stripeFee||0)}</div><div class="s">commissions paiement</div></div>
-      <div class="st" style="opacity:.55"><div class="l">🤖 Coûts IA</div><div class="v tnum">—</div><div class="s">fal + Claude à brancher</div></div>
-      <div class="st"><div class="l">📊 Marge</div><div class="v tnum" style="color:var(--good)">${money(w.margin||0)}</div><div class="s">avant coûts IA & fixes</div></div>
+      <div class="st"><div class="l">🧠 Coût Claude</div><div class="v tnum">−${money(w.aiClaude||0)}</div><div class="s">usage réel (fiable)</div></div>
+      <div class="st"><div class="l">📊 Marge</div><div class="v tnum" style="color:var(--good)">${money(w.margin||0)}</div><div class="s">avant fal &amp; coûts fixes</div></div>
     </div>
-    <div style="font-size:11px;color:var(--faint);margin-top:8px">Marge = recettes − frais Stripe − remboursements − litiges. Manquent encore : coûts IA (fal/Claude) + coûts fixes (hébergement/outils).</div>
+    <div style="font-size:11px;color:var(--faint);margin-top:8px">Marge = recettes − frais Stripe − remb − litiges − <b>coût Claude</b>. Manquent : fal.ai (vidéo) + coûts fixes.</div>
 
     <div class="eye">État actuel · en temps réel</div>
     <div class="live">
