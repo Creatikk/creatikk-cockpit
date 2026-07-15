@@ -86,13 +86,14 @@
 
 <script>
 const F = new Intl.NumberFormat('fr-FR');
+const F2 = new Intl.NumberFormat('fr-FR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 let win = 'today';
 const WINLABEL = { today: "aujourd'hui", d7: '7 derniers jours', d30: '30 derniers jours' };
 const MOIS = ['janv.','févr.','mars','avr.','mai','juin','juil.','août','sept.','oct.','nov.','déc.'];
 const isDay = (k) => /^\d{4}-\d{2}-\d{2}$/.test(k);
 function winLabel(k){ if (WINLABEL[k]) return WINLABEL[k]; const [y,m,dd]=k.split('-'); return `${+dd} ${MOIS[+m-1]} ${y}`; }
 
-function money(n){ return F.format(Math.round(n)) + ' €'; }
+function money(n){ return F2.format(+n||0) + ' €'; }
 
 function render(d){
   const dayMode = isDay(win);

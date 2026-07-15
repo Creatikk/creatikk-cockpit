@@ -206,6 +206,7 @@ async function refresh() {
     const HIST = T.now - HISTORY_DAYS * 86400; // début de l'historique
     const gte = Math.floor(HIST - 5 * 86400);
     const fmtD = (ts) => new Date(ts * 1000).toISOString().slice(0, 10);
+    const r2 = (x) => Math.round(x * 100) / 100; // arrondi au centime
     // Tous les appels indépendants EN PARALLÈLE (temps = le plus lent, pas la somme)
     const [subs, charges, disputes, invoices, bts, claudeUsd, falUsd, openaiUsd] = await Promise.all([
       paginate('subscriptions', '&status=all'),
@@ -341,18 +342,18 @@ async function refresh() {
       const key = dk(T.now - i * 86400), g = dayAgg[key] || {};
       const rev = g.rev || 0, refund = g.refund || 0, dispAmt = g.disputeAmt || 0, fails = g.fails || 0, sales = g.sales || 0;
       days[key] = {
-        rev: Math.round(rev), sales, news: g.news || 0, cancels: g.cancels || 0, fails,
+        rev: r2(rev), sales, news: g.news || 0, cancels: g.cancels || 0, fails,
         failRate: (sales + fails) ? Math.round(fails / (sales + fails) * 100) : 0,
-        refund: Math.round(refund), net: Math.round(rev - refund - dispAmt),
-        newSales: g.newSales || 0, newRev: Math.round(g.newRev || 0),
-        renews: g.renews || 0, renRev: Math.round(g.renRev || 0),
-        disputes: g.disputes || 0, disputeAmt: Math.round(dispAmt),
-        stripeFee: Math.round(feeByDay[key] || 0),
-        aiClaude: +((claudeEurByDay[key] || 0)).toFixed(2),
-        aiFal: +((falEurByDay[key] || 0)).toFixed(2),
-        aiOpenai: +((openaiEurByDay[key] || 0)).toFixed(2),
-        fixedCost: Math.round(fixedDay),
-        margin: Math.round(rev - refund - dispAmt - (feeByDay[key] || 0) - (claudeEurByDay[key] || 0) - (falEurByDay[key] || 0) - (openaiEurByDay[key] || 0) - fixedDay),
+        refund: r2(refund), net: r2(rev - refund - dispAmt),
+        newSales: g.newSales || 0, newRev: r2(g.newRev || 0),
+        renews: g.renews || 0, renRev: r2(g.renRev || 0),
+        disputes: g.disputes || 0, disputeAmt: r2(dispAmt),
+        stripeFee: r2(feeByDay[key] || 0),
+        aiClaude: r2(claudeEurByDay[key] || 0),
+        aiFal: r2(falEurByDay[key] || 0),
+        aiOpenai: r2(openaiEurByDay[key] || 0),
+        fixedCost: r2(fixedDay),
+        margin: r2(rev - refund - dispAmt - (feeByDay[key] || 0) - (claudeEurByDay[key] || 0) - (falEurByDay[key] || 0) - (openaiEurByDay[key] || 0) - fixedDay),
       };
     }
 
@@ -376,23 +377,23 @@ async function refresh() {
     }
 
     const winData = (k, from) => ({
-      rev: Math.round(pay[k].rev),
+      rev: r2(pay[k].rev),
       sales: pay[k].ok,
       news: newCount(from),
       cancels: cancelCount(from),
       fails: pay[k].fail,
       failRate: failRate(pay[k]),
-      refund: Math.round(pay[k].refund),
-      net: Math.round(pay[k].rev - pay[k].refund - disp[k].amt),
-      newSales: split[k].newN, newRev: Math.round(split[k].newRev),
-      renews: split[k].renN, renRev: Math.round(split[k].renRev),
-      disputes: disp[k].n, disputeAmt: Math.round(disp[k].amt),
-      stripeFee: Math.round(feeWin[k]),
-      aiClaude: +(claudeWin[k]).toFixed(2),
-      aiFal: +(falWin[k]).toFixed(2),
-      aiOpenai: +(openaiWin[k]).toFixed(2),
-      fixedCost: Math.round(fixedWin[k]),
-      margin: Math.round(pay[k].rev - pay[k].refund - disp[k].amt - feeWin[k] - claudeWin[k] - falWin[k] - openaiWin[k] - fixedWin[k]),
+      refund: r2(pay[k].refund),
+      net: r2(pay[k].rev - pay[k].refund - disp[k].amt),
+      newSales: split[k].newN, newRev: r2(split[k].newRev),
+      renews: split[k].renN, renRev: r2(split[k].renRev),
+      disputes: disp[k].n, disputeAmt: r2(disp[k].amt),
+      stripeFee: r2(feeWin[k]),
+      aiClaude: r2(claudeWin[k]),
+      aiFal: r2(falWin[k]),
+      aiOpenai: r2(openaiWin[k]),
+      fixedCost: r2(fixedWin[k]),
+      margin: r2(pay[k].rev - pay[k].refund - disp[k].amt - feeWin[k] - claudeWin[k] - falWin[k] - openaiWin[k] - fixedWin[k]),
     });
 
     CACHE = {
