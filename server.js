@@ -243,7 +243,7 @@ const server = http.createServer((req, res) => {
     if (err) { res.writeHead(404); res.end('not found'); return; }
     const ext = path.extname(fp);
     const ct = ext === '.html' ? 'text/html' : ext === '.json' ? 'application/json' : ext === '.js' ? 'text/javascript' : 'text/plain';
-    res.writeHead(200, { 'Content-Type': ct + '; charset=utf-8' });
+    res.writeHead(200, { 'Content-Type': ct + '; charset=utf-8', 'Cache-Control': 'no-cache' });
     res.end(buf);
   });
 });
