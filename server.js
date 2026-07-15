@@ -118,31 +118,50 @@ async function refresh() {
     const newCount = (from) => subs.filter((s) => inWin(s.created, from)).length;
     const cancelCount = (from) => subs.filter((s) => inWin(s.canceled_at, from)).length;
 
-    // --- Paiements ---
-    let okDay = 0, okD7 = 0, okD30 = 0, revDay = 0, revD7 = 0, revD30 = 0;
-    let failDay = 0, failD7 = 0, failD30 = 0;
-    const dayBuckets = {}; // 30 jours de revenu
+    // --- Paiements (revenu, échecs, remboursements par fenêtre) ---
+    const W = { today: T.today, d7: T.d7, d30: T.d30 };
+    const zero = () => ({ ok: 0, rev: 0, fail: 0, refund: 0 });
+    const pay = { today: zero(), d7: zero(), d30: zero() };
+    const dayBuckets = {};
     for (const c of charges) {
       if (c.currency !== 'eur') continue;
-      const ok = c.status === 'succeeded' && c.paid;
-      const amt = c.amount / 100;
-      if (ok) {
-        if (c.created >= T.today) { okDay++; revDay += amt; }
-        if (c.created >= T.d7) { okD7++; revD7 += amt; }
-        if (c.created >= T.d30) { okD30++; revD30 += amt; }
+      const amt = c.amount / 100, ref = (c.amount_refunded || 0) / 100;
+      if (c.status === 'succeeded' && c.paid) {
+        for (const k of Object.keys(W)) if (c.created >= W[k]) { pay[k].ok++; pay[k].rev += amt; pay[k].refund += ref; }
         const dk = new Date((c.created + PARIS_OFFSET_H * 3600) * 1000).toISOString().slice(0, 10);
         dayBuckets[dk] = (dayBuckets[dk] || 0) + amt;
       } else if (c.status === 'failed') {
-        if (c.created >= T.today) failDay++;
-        if (c.created >= T.d7) failD7++;
-        if (c.created >= T.d30) failD30++;
+        for (const k of Object.keys(W)) if (c.created >= W[k]) pay[k].fail++;
       }
     }
+    const failRate = (w) => (w.ok + w.fail) ? Math.round(w.fail / (w.ok + w.fail) * 100) : 0;
     // série 30 jours
     const spark = [];
     for (let i = 29; i >= 0; i--) {
       const dk = new Date((T.now - i * 86400 + PARIS_OFFSET_H * 3600) * 1000).toISOString().slice(0, 10);
       spark.push({ d: dk, v: Math.round(dayBuckets[dk] || 0) });
+    }
+
+    // --- Litiges / chargebacks (par fenêtre) ---
+    const disputes = await paginate('disputes', `&created[gte]=${Math.floor(T.d30)}`);
+    const disp = { today: { n: 0, amt: 0 }, d7: { n: 0, amt: 0 }, d30: { n: 0, amt: 0 } };
+    for (const d of disputes) {
+      const a = (d.amount || 0) / 100;
+      for (const k of Object.keys(W)) if (d.created >= W[k]) { disp[k].n++; disp[k].amt += a; }
+    }
+
+    // --- Factures : nouvelles ventes vs renouvellements (par fenêtre) ---
+    const invoices = await paginate('invoices', `&status=paid&created[gte]=${Math.floor(T.d30 - 5 * 86400)}`);
+    const split = { today: { newN: 0, newRev: 0, renN: 0, renRev: 0 }, d7: { newN: 0, newRev: 0, renN: 0, renRev: 0 }, d30: { newN: 0, newRev: 0, renN: 0, renRev: 0 } };
+    for (const inv of invoices) {
+      if (inv.currency !== 'eur') continue;
+      const amt = (inv.amount_paid || 0) / 100;
+      const isNew = inv.billing_reason === 'subscription_create' || inv.billing_reason === 'manual';
+      const isRenew = inv.billing_reason === 'subscription_cycle';
+      for (const k of Object.keys(W)) if (inv.created >= W[k]) {
+        if (isNew) { split[k].newN++; split[k].newRev += amt; }
+        else if (isRenew) { split[k].renN++; split[k].renRev += amt; }
+      }
     }
 
     // --- Trafic PostHog (non bloquant : si ça échoue, Stripe reste servi) ---
@@ -158,6 +177,20 @@ async function refresh() {
       } catch (e) { console.log('posthog ERR', String(e && e.message || e)); }
     }
 
+    const winData = (k, from) => ({
+      rev: Math.round(pay[k].rev),
+      sales: pay[k].ok,
+      news: newCount(from),
+      cancels: cancelCount(from),
+      fails: pay[k].fail,
+      failRate: failRate(pay[k]),
+      refund: Math.round(pay[k].refund),
+      net: Math.round(pay[k].rev - pay[k].refund - disp[k].amt),
+      newSales: split[k].newN, newRev: Math.round(split[k].newRev),
+      renews: split[k].renN, renRev: Math.round(split[k].renRev),
+      disputes: disp[k].n, disputeAmt: Math.round(disp[k].amt),
+    });
+
     CACHE = {
       loading: false, error: null, at: Date.now(),
       data: {
@@ -168,14 +201,14 @@ async function refresh() {
           active: active.length, canceling: canceling.length, pastDue: pastDue.length,
           totalSubs: subs.length,
         },
-        today: { rev: Math.round(revDay), sales: okDay, news: newCount(T.today), cancels: cancelCount(T.today), fails: failDay },
-        d7: { rev: Math.round(revD7), sales: okD7, news: newCount(T.d7), cancels: cancelCount(T.d7), fails: failD7 },
-        d30: { rev: Math.round(revD30), sales: okD30, news: newCount(T.d30), cancels: cancelCount(T.d30), fails: failD30 },
+        today: winData('today', T.today),
+        d7: winData('d7', T.d7),
+        d30: winData('d30', T.d30),
         spark,
         mrrLost: Math.round(computeMRR(canceling)),
       },
     };
-    console.log(new Date().toISOString(), 'refresh OK — actifs', active.length, 'MRR', Math.round(mrr), 'ventes/j', okDay);
+    console.log(new Date().toISOString(), 'refresh OK — actifs', active.length, 'MRR', Math.round(mrr), 'ventes/j', pay.today.ok);
   } catch (e) {
     CACHE.error = String(e && e.message || e);
     CACHE.loading = false;

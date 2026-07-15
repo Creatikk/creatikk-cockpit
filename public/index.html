@@ -123,7 +123,7 @@ function render(d){
     <div class="win">Fenêtre : <b style="color:var(--muted)">${WINLABEL[win]}</b></div>
 
     <div class="kpis">
-      <div class="kpi good"><div class="lab">💶 Ventes</div><div class="val tnum">${money(w.rev)}</div><div class="note">${w.sales} paiement${w.sales>1?'s':''}</div></div>
+      <div class="kpi good"><div class="lab">💶 Ventes</div><div class="val tnum">${money(w.rev)}</div><div class="note">${w.newSales} nouvelle${w.newSales>1?'s':''} · ${w.renews} renouv.</div></div>
       <div class="kpi"><div class="lab">🆕 Nouveaux abonnés</div><div class="val tnum">+${w.news}</div><div class="note">${WINLABEL[win]}</div></div>
       <div class="kpi ${w.cancels>w.news?'crit':''}"><div class="lab">📉 Résiliations</div><div class="val tnum">−${w.cancels}</div><div class="note">${WINLABEL[win]}</div></div>
       <div class="kpi"><div class="lab">🔄 Net</div><div class="val tnum">${(w.news-w.cancels)>=0?'+':''}${w.news-w.cancels}</div><div class="note">nouveaux − partis</div></div>
@@ -140,7 +140,24 @@ function render(d){
       <div class="st"><div class="l">⏳ Retard paiement</div><div class="v tnum">${L.pastDue}</div><div class="s">à relancer (dunning)</div></div>
     </div>
 
+    <div class="eye">Santé &amp; risques · ${WINLABEL[win]}</div>
+    <div class="live">
+      <div class="st"><div class="l">💚 Revenu net</div><div class="v tnum">${money(w.net)}</div><div class="s">après remb. &amp; litiges</div></div>
+      <div class="st"><div class="l">❌ Taux d'échec paiement</div><div class="v tnum" style="color:${w.failRate>40?'var(--crit)':'var(--ink)'}">${w.failRate}%</div><div class="s">${w.fails} échec${w.fails>1?'s':''}</div></div>
+      <div class="st"><div class="l">↩️ Remboursements</div><div class="v tnum">${money(w.refund)}</div><div class="s">${WINLABEL[win]}</div></div>
+      <div class="st"><div class="l">⚖️ Litiges (chargebacks)</div><div class="v tnum" style="color:${w.disputes>0?'var(--warn)':'var(--ink)'}">${w.disputes}</div><div class="s">${money(w.disputeAmt)} contestés</div></div>
+    </div>
+
     ${trafficHtml}
+
+    <div class="eye">Acquisition créateurs · Whop</div>
+    <div class="live">
+      <div class="st" style="opacity:.55"><div class="l">🎬 Vues générées</div><div class="v tnum">—</div><div class="s">dès la v2</div></div>
+      <div class="st" style="opacity:.55"><div class="l">💸 Coût / 1000 vues</div><div class="v tnum">1 $</div><div class="s">payé aux vues</div></div>
+      <div class="st" style="opacity:.55"><div class="l">🎯 Coût par inscrit</div><div class="v tnum">—</div><div class="s">vues → inscrits</div></div>
+      <div class="st" style="opacity:.55"><div class="l">💰 Coût par vente</div><div class="v tnum">—</div><div class="s">ton vrai CAC</div></div>
+    </div>
+    <div style="font-size:11px;color:var(--faint);margin-top:8px">Se branchera quand tes créateurs démarreront (sortie v2).</div>
 
     <div class="panel">
       <h3>Revenu · 30 derniers jours <em>${money(d.d30.rev)} au total</em></h3>
