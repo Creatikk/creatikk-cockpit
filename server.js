@@ -304,16 +304,18 @@ async function refresh() {
     }
 
     // --- Factures : nouvelles ventes vs renouvellements (par fenêtre) — invoices déjà chargé ---
+    // Date de PAIEMENT de la facture (= quand l'argent rentre), pas sa création → aligne le détail sur les recettes.
+    const invPaid = (inv) => (inv.status_transitions && inv.status_transitions.paid_at) || inv.created;
     const split = { today: { newN: 0, newRev: 0, renN: 0, renRev: 0 }, d7: { newN: 0, newRev: 0, renN: 0, renRev: 0 }, d30: { newN: 0, newRev: 0, renN: 0, renRev: 0 } };
     for (const inv of invoices) {
       if (inv.currency !== 'eur') continue;
       const amt = (inv.amount_paid || 0) / 100;
       if (amt <= 0) continue; // une facture à 0€ n'est pas une vente (coupon/prorata/downsell)
       const isNew = inv.billing_reason === 'subscription_create';
-      const isRenew = inv.billing_reason === 'subscription_cycle';
-      for (const k of Object.keys(W)) if (inv.created >= W[k]) {
+      const paidTs = invPaid(inv);
+      for (const k of Object.keys(W)) if (paidTs >= W[k]) {
         if (isNew) { split[k].newN++; split[k].newRev += amt; }
-        else if (isRenew) { split[k].renN++; split[k].renRev += amt; }
+        else { split[k].renN++; split[k].renRev += amt; } // cycle + update + autres = un client existant qui re-paie
       }
     }
 
@@ -382,9 +384,9 @@ async function refresh() {
       if (inv.currency !== 'eur') continue;
       const amt = (inv.amount_paid || 0) / 100;
       if (amt <= 0) continue; // facture à 0€ = pas une vente
-      const g = dget(dk(inv.created));
+      const g = dget(dk(invPaid(inv)));
       if (inv.billing_reason === 'subscription_create') { g.newSales++; g.newRev += amt; }
-      else if (inv.billing_reason === 'subscription_cycle') { g.renews++; g.renRev += amt; }
+      else { g.renews++; g.renRev += amt; } // cycle + update + autres = client existant qui re-paie
     }
     for (const dd of disputes) { const g = dget(dk(dd.created)); g.disputes++; g.disputeAmt += (dd.amount || 0) / 100; }
     for (const s of subs) {
