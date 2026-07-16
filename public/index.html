@@ -145,6 +145,17 @@ function render(d){
 
     ${alerts}
 
+    ${d.supaConnected?`
+    <div class="eye">🧭 Funnel · inscription → paiement · ${winLabel(win)}</div>
+    <div class="live">
+      <div class="st"><div class="l">🧑 Comptes créés</div><div class="v tnum">${F.format(w.signups||0)}</div><div class="s">Supabase (vrai)</div></div>
+      <div class="st"><div class="l">💳 Nouvelles ventes</div><div class="v tnum">${F.format(w.newSales||0)}</div><div class="s">1er paiement</div></div>
+      <div class="st"><div class="l">🎯 Conversion</div><div class="v tnum" style="color:${w.signups&&(w.newSales/w.signups)>=0.05?'var(--good)':'var(--ink)'}">${w.signups?(w.newSales/w.signups*100).toFixed(1):'0'}%</div><div class="s">inscrit → payé</div></div>
+      <div class="st"><div class="l">💤 Non convertis</div><div class="v tnum">${F.format(Math.max(0,(w.signups||0)-(w.newSales||0)))}</div><div class="s">à activer / relancer</div></div>
+    </div>
+    <div style="font-size:11px;color:var(--faint);margin-top:8px">Vraies créations de compte (Supabase Auth) vs 1ers paiements (Stripe) sur la fenêtre. Le taux inscrit→payé = ton levier n°1.</div>
+    `:''}
+
     <div class="eye">💰 Recettes · Coûts · Marge · ${winLabel(win)}</div>
     <div class="live">
       <div class="st"><div class="l">💶 Recettes</div><div class="v tnum">${money(w.rev)}</div><div class="s">${w.newSales} nouv · ${w.renews} renouv</div></div>

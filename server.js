@@ -31,6 +31,15 @@ let OPENAI_ADMIN_KEY = process.env.OPENAI_ADMIN_KEY || '';
 if (!OPENAI_ADMIN_KEY) {
   try { OPENAI_ADMIN_KEY = fs.readFileSync('/private/tmp/claude-501/-Users-julien-Dev-Creatikk/5a7315b3-ef28-4ecf-8333-cabac36b6206/scratchpad/openai_admin_key.txt', 'utf8').trim(); } catch (e) {}
 }
+// Supabase : compte les créations de compte (auth.users). URL projet + clé secrète (server-side only, lecture).
+let SUPABASE_URL = process.env.SUPABASE_URL || '';
+if (!SUPABASE_URL) {
+  try { SUPABASE_URL = fs.readFileSync('/private/tmp/claude-501/-Users-julien-Dev-Creatikk/5a7315b3-ef28-4ecf-8333-cabac36b6206/scratchpad/supabase_url.txt', 'utf8').trim(); } catch (e) {}
+}
+let SUPABASE_KEY = process.env.SUPABASE_KEY || '';
+if (!SUPABASE_KEY) {
+  try { SUPABASE_KEY = fs.readFileSync('/private/tmp/claude-501/-Users-julien-Dev-Creatikk/5a7315b3-ef28-4ecf-8333-cabac36b6206/scratchpad/supabase_key.txt', 'utf8').trim(); } catch (e) {}
+}
 const EUR_PER_USD = +(process.env.EUR_PER_USD || 0.92); // conversion coûts IA (USD) → € pour la marge
 // Coûts fixes mensuels (€/mois) : env JSON, ex {"Render":7,"Vercel":20,"Loops":49}.
 // Défaut = Google/Gemini (moyenne factures Google Cloud mars-juin ≈ 34€/mois ; Google n'a pas d'API de coût simple). Surchargeable via env.
@@ -180,6 +189,38 @@ async function openaiCostByDay(startUnix) {
   return byDay;
 }
 
+// --- Créations de compte (Supabase Auth, auth.users) ---
+function supabaseGet(pathq) {
+  return new Promise((resolve, reject) => {
+    const host = SUPABASE_URL.replace(/^https?:\/\//, '').replace(/\/$/, '');
+    const opts = { host, path: pathq, method: 'GET', headers: { apikey: SUPABASE_KEY, Authorization: 'Bearer ' + SUPABASE_KEY } };
+    const req = https.request(opts, (res) => { let d = ''; res.on('data', (c) => (d += c)); res.on('end', () => { try { resolve(JSON.parse(d)); } catch (e) { reject(e); } }); });
+    req.on('error', reject); req.setTimeout(30000, () => req.destroy(new Error('supabase timeout'))); req.end();
+  });
+}
+// Compte les users créés par jour (Paris), en paginant du plus récent au plus ancien, jusqu'à histTs.
+async function supabaseSignupsByDay(histTs) {
+  if (!SUPABASE_URL || !SUPABASE_KEY) return null;
+  const byDay = {};
+  for (let page = 1; page <= 80; page++) {
+    const d = await supabaseGet(`/auth/v1/admin/users?page=${page}&per_page=200`);
+    const users = (d && d.users) || [];
+    if (!users.length) break;
+    let oldest = Infinity;
+    for (const u of users) {
+      const ts = Date.parse(u.created_at) / 1000;
+      if (!ts) continue;
+      if (ts < oldest) oldest = ts;
+      if (ts >= histTs) {
+        const key = new Date((ts + PARIS_OFFSET_H * 3600) * 1000).toISOString().slice(0, 10);
+        byDay[key] = (byDay[key] || 0) + 1;
+      }
+    }
+    if (oldest < histTs || users.length < 200) break; // fenêtre couverte / dernière page
+  }
+  return byDay;
+}
+
 // --- Bornes de temps (jour Paris) ---
 function dayStartsUTC() {
   const now = Date.now() / 1000;
@@ -208,7 +249,7 @@ async function refresh() {
     const fmtD = (ts) => new Date(ts * 1000).toISOString().slice(0, 10);
     const r2 = (x) => Math.round(x * 100) / 100; // arrondi au centime
     // Tous les appels indépendants EN PARALLÈLE (temps = le plus lent, pas la somme)
-    const [subs, charges, disputes, invoices, bts, claudeUsd, falUsd, openaiUsd] = await Promise.all([
+    const [subs, charges, disputes, invoices, bts, claudeUsd, falUsd, openaiUsd, supaSignups] = await Promise.all([
       paginate('subscriptions', '&status=all'),
       paginate('charges', `&created[gte]=${gte}`),
       paginate('disputes', `&created[gte]=${Math.floor(HIST)}`),
@@ -217,6 +258,7 @@ async function refresh() {
       claudeCostByDay(new Date(HIST * 1000).toISOString()).catch((e) => { console.log('claude cost ERR', e && e.message); return null; }),
       falCostByDay(fmtD(HIST), fmtD(T.now + 2 * 86400)).catch((e) => { console.log('fal cost ERR', e && e.message); return null; }),
       openaiCostByDay(Math.floor(HIST)).catch((e) => { console.log('openai cost ERR', e && e.message); return null; }),
+      supabaseSignupsByDay(HIST).catch((e) => { console.log('supabase ERR', e && e.message); return null; }),
     ]);
 
     // --- Abonnements / état live ---
@@ -319,6 +361,15 @@ async function refresh() {
 
     // --- Détail JOUR PAR JOUR (35 derniers jours) pour le sélecteur de date ---
     const dk = (ts) => new Date((ts + PARIS_OFFSET_H * 3600) * 1000).toISOString().slice(0, 10);
+    // --- Créations de compte (Supabase) → fenêtres (par jour calendaire Paris) ---
+    const signupsByDay = supaSignups || null;
+    const signupsWin = { today: 0, d7: 0, d30: 0 };
+    if (signupsByDay) for (let i = 0; i < 30; i++) {
+      const v = signupsByDay[dk(T.now - i * 86400)] || 0;
+      if (i === 0) signupsWin.today += v;
+      if (i < 7) signupsWin.d7 += v;
+      signupsWin.d30 += v;
+    }
     const dayAgg = {};
     const dget = (k) => (dayAgg[k] || (dayAgg[k] = { rev: 0, sales: 0, fails: 0, refund: 0, newSales: 0, newRev: 0, renews: 0, renRev: 0, disputes: 0, disputeAmt: 0, news: 0, cancels: 0 }));
     for (const c of charges) {
@@ -346,6 +397,7 @@ async function refresh() {
       const rev = g.rev || 0, refund = g.refund || 0, dispAmt = g.disputeAmt || 0, fails = g.fails || 0, sales = g.sales || 0;
       days[key] = {
         rev: r2(rev), sales, news: g.news || 0, cancels: g.cancels || 0, fails,
+        signups: (signupsByDay && signupsByDay[key]) || 0,
         failRate: (sales + fails) ? Math.round(fails / (sales + fails) * 100) : 0,
         refund: r2(refund), net: r2(rev - refund - dispAmt),
         newSales: g.newSales || 0, newRev: r2(g.newRev || 0),
@@ -382,6 +434,7 @@ async function refresh() {
     const winData = (k, from) => ({
       rev: r2(pay[k].rev),
       sales: pay[k].ok,
+      signups: signupsWin[k],
       news: newCount(from),
       cancels: cancelCount(from),
       fails: pay[k].fail,
@@ -405,6 +458,7 @@ async function refresh() {
         traffic,
         trafficDays,
         phConnected: !!PH_KEY,
+        supaConnected: !!(SUPABASE_URL && SUPABASE_KEY),
         live: {
           mrr: Math.round(mrr), arr: Math.round(mrr * 12), arpu: +arpu.toFixed(2),
           active: active.length, canceling: canceling.length, pastDue: pastDue.length,
