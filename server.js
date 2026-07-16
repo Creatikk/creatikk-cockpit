@@ -269,7 +269,9 @@ async function refresh() {
     const arpu = active.length ? mrr / active.length : 0;
 
     const inWin = (ts, from) => ts && ts >= from;
-    const newCount = (from) => subs.filter((s) => inWin(s.created, from)).length;
+    // Un abo « nouvel abonné » = réellement démarré. On exclut incomplete/incomplete_expired (1er paiement jamais passé = carte refusée) : ça compterait un abonné qui n'a jamais payé.
+    const started = (s) => s.status !== 'incomplete' && s.status !== 'incomplete_expired';
+    const newCount = (from) => subs.filter((s) => inWin(s.created, from) && started(s)).length;
     const cancelCount = (from) => subs.filter((s) => inWin(s.canceled_at, from)).length;
 
     // --- Paiements (revenu, échecs, remboursements par fenêtre) ---
@@ -372,7 +374,7 @@ async function refresh() {
     }
     for (const dd of disputes) { const g = dget(dk(dd.created)); g.disputes++; g.disputeAmt += (dd.amount || 0) / 100; }
     for (const s of subs) {
-      if (s.created >= HIST) dget(dk(s.created)).news++;
+      if (s.created >= HIST && started(s)) dget(dk(s.created)).news++;
       if (s.canceled_at && s.canceled_at >= HIST) dget(dk(s.canceled_at)).cancels++;
     }
     const days = {};
