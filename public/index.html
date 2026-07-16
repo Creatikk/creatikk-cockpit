@@ -79,6 +79,17 @@
   .txamt{font-weight:700;text-align:right;font-variant-numeric:tabular-nums}
   .txtime{color:var(--faint);font-size:11px;text-align:right}
   @media(max-width:700px){.txrow{grid-template-columns:64px 1fr 72px}.txplan,.txtime{display:none}}
+  /* cohortes */
+  .cohort{font-size:12px}
+  .chead,.crow{display:grid;grid-template-columns:60px 38px repeat(7,1fr);gap:4px;align-items:center}
+  .chead{color:var(--muted);font-weight:600;font-size:10.5px;margin-bottom:7px}
+  .chead span,.crow span{text-align:center}
+  .crow{margin-bottom:4px}
+  .cm{color:var(--muted);text-align:left!important;font-weight:600}
+  .cn{color:var(--faint)}
+  .cc{padding:6px 0;border-radius:5px;font-variant-numeric:tabular-nums;font-size:11px}
+  .cc.empty{background:transparent;color:transparent}
+  @media(max-width:760px){.cohort{overflow-x:auto}.chead,.crow{min-width:440px}}
   .alert{display:flex;align-items:center;gap:10px;background:rgba(255,92,122,.08);border:1px solid rgba(255,92,122,.3);border-radius:12px;padding:12px 14px;margin-top:14px;font-size:13px;color:#ffd3dc}
   .alert.warn{background:rgba(246,181,61,.08);border-color:rgba(246,181,61,.3);color:#ffe6b8}
   .foot{margin-top:26px;text-align:center;color:var(--faint);font-size:11px;line-height:1.7}
@@ -120,6 +131,14 @@ function txForWin(d){
   const from = (d.nowSec || 0) - (win === 'd7' ? 7 : 30) * 86400;
   return tx.filter(x => x.t >= from);
 }
+// flèche de tendance ; goodUp=false quand « moins = mieux » (ex résiliations)
+function arrow(delta, goodUp){
+  if (goodUp === undefined) goodUp = true;
+  if (!delta) return `<span style="color:var(--faint)">→ 0%</span>`;
+  const up = delta > 0, good = (up === goodUp);
+  return `<span style="color:${good?'var(--good)':'var(--crit)'}">${up?'▲':'▼'} ${up?'+':''}${delta}%</span>`;
+}
+function cohColor(v){ return `rgba(46,213,146,${Math.max(.06, Math.min(.85, v/100)).toFixed(2)})`; } // vert = rétention
 
 function render(d){
   const dayMode = isDay(win);
@@ -212,6 +231,22 @@ function render(d){
       <div class="st"><div class="l">⏳ Retard paiement</div><div class="v tnum">${L.pastDue}</div><div class="s">à relancer (dunning)</div></div>
     </div>
 
+    ${d.trends?(()=>{const T=d.trends;return `
+    <div class="eye">📈 Tendance · 7 jours vs 7 précédents</div>
+    <div class="live">
+      <div class="st"><div class="l">💶 Recettes</div><div class="v tnum">${money(T.rev.cur)}</div><div class="s">${arrow(T.rev.delta)} · avant ${money(T.rev.prev)}</div></div>
+      <div class="st"><div class="l">🧑 Inscriptions</div><div class="v tnum">${F.format(T.signups.cur)}</div><div class="s">${arrow(T.signups.delta)} · avant ${F.format(T.signups.prev)}</div></div>
+      <div class="st"><div class="l">🎯 Conversion</div><div class="v tnum">${T.conv.cur}%</div><div class="s">${arrow(T.conv.delta)} · avant ${T.conv.prev}%</div></div>
+      <div class="st"><div class="l">📉 Résiliations</div><div class="v tnum">${T.cancels.cur}</div><div class="s">${arrow(T.cancels.delta,false)} · avant ${T.cancels.prev}</div></div>
+    </div>`;})():''}
+
+    ${d.planMix&&d.planMix.length?`
+    <div class="eye">🧩 Répartition par formule · abonnés actifs</div>
+    <div class="live">
+      ${d.planMix.slice(0,8).map(p=>`<div class="st"><div class="l">${p.label}</div><div class="v tnum">${F.format(p.count)}</div><div class="s">MRR ${money(p.mrr)}</div></div>`).join('')}
+    </div>
+    <div style="font-size:11px;color:var(--faint);margin-top:8px">Où se concentre ton MRR. L'annuel = revenu sécurisé (la « bouée » anti-churn).</div>`:''}
+
     <div class="eye">Santé &amp; risques · ${winLabel(win)}</div>
     <div class="live">
       <div class="st"><div class="l">💚 Revenu net</div><div class="v tnum">${money(w.net)}</div><div class="s">après remb. &amp; litiges</div></div>
@@ -230,6 +265,16 @@ function render(d){
       <div class="st" style="opacity:.55"><div class="l">💰 Coût par vente</div><div class="v tnum">—</div><div class="s">ton vrai CAC</div></div>
     </div>
     <div style="font-size:11px;color:var(--faint);margin-top:8px">Se branchera quand tes créateurs démarreront (sortie v2).</div>
+
+    ${d.cohorts&&d.cohorts.length?`
+    <div class="panel">
+      <h3>🔁 Rétention par cohorte · abonnés mensuels <em>% encore abonné après N mois</em></h3>
+      <div class="cohort">
+        <div class="chead"><span style="text-align:left">Cohorte</span><span>n</span>${[0,1,2,3,4,5,6].map(k=>`<span>M${k}</span>`).join('')}</div>
+        ${d.cohorts.slice().reverse().map(c=>`<div class="crow"><span class="cm">${c.month}</span><span class="cn">${F.format(c.size)}</span>${[0,1,2,3,4,5,6].map(k=>{const v=c.ret[k];return v===undefined?'<span class="cc empty">·</span>':`<span class="cc" style="background:${cohColor(v)}">${v}%</span>`;}).join('')}</div>`).join('')}
+      </div>
+      <div style="font-size:11px;color:var(--faint);margin-top:11px">Lecture : « 2026-01 · M1 = 40% » → sur les inscrits mensuels de janvier, 40% payaient encore 1 mois après. <b style="color:var(--muted)">Cible v2 : garder M1 &gt; 60-70%</b> (V1 tourne autour de 30-40%).</div>
+    </div>`:''}
 
     <div class="panel">
       <h3>Revenu · 30 derniers jours <em>${money(d.d30.rev)} au total</em></h3>

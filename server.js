@@ -416,6 +416,51 @@ async function refresh() {
     }
     tx.sort((a, b) => b.t - a.t);
 
+    // --- Rétention par cohorte (abonnés MENSUELS : mois d'inscription → % encore abonné à M1, M2…) ---
+    const MONTHK = 30.44 * 86400;
+    const isMonthly = (s) => ((s.items && s.items.data && s.items.data[0] && s.items.data[0].price && s.items.data[0].price.recurring || {}).interval === 'month');
+    const cohortMap = {};
+    for (const s of subs) {
+      if (!s.created || !isMonthly(s)) continue;
+      const dt = new Date(s.created * 1000);
+      const cm = dt.getUTCFullYear() + '-' + String(dt.getUTCMonth() + 1).padStart(2, '0');
+      const end = s.canceled_at || T.now; // encore abonné → jusqu'à maintenant
+      const life = (end - s.created) / MONTHK;
+      const c = cohortMap[cm] || (cohortMap[cm] = { size: 0, life: [] });
+      c.size++; c.life.push(life);
+    }
+    const cohorts = [];
+    for (const m of Object.keys(cohortMap).sort().slice(-7)) {
+      const c = cohortMap[m];
+      const [yy, mm] = m.split('-').map(Number);
+      const ageM = (T.now - Date.UTC(yy, mm - 1, 1) / 1000) / MONTHK;
+      const ret = [];
+      for (let k = 0; k <= 6 && k <= ageM + 0.02; k++) ret.push(Math.round(c.life.filter((l) => l >= k).length / c.size * 100));
+      cohorts.push({ month: m, size: c.size, ret });
+    }
+
+    // --- Tendance : 7 derniers jours vs 7 précédents (direction pour l'agent IA) ---
+    const trendOf = (field) => {
+      let cur = 0, prev = 0;
+      for (let i = 0; i < 14; i++) { const g = days[dk(T.now - i * 86400)] || {}; const v = +g[field] || 0; if (i < 7) cur += v; else prev += v; }
+      return { cur: r2(cur), prev: r2(prev), delta: prev ? Math.round((cur - prev) / prev * 100) : (cur > 0 ? 100 : 0) };
+    };
+    const trends = { rev: trendOf('rev'), newSales: trendOf('newSales'), signups: trendOf('signups'), cancels: trendOf('cancels') };
+    const cvp = (a, b) => (b ? +(a / b * 100).toFixed(1) : 0);
+    trends.conv = { cur: cvp(trends.newSales.cur, trends.signups.cur), prev: cvp(trends.newSales.prev, trends.signups.prev) };
+    trends.conv.delta = trends.conv.prev ? Math.round((trends.conv.cur - trends.conv.prev) / trends.conv.prev * 100) : 0;
+
+    // --- Répartition par formule (abonnés actifs) : où se concentre le MRR ---
+    const planMap = {};
+    for (const s of active) {
+      const it = (s.items && s.items.data && s.items.data[0]) || {}; const pr = it.price || {};
+      const amt = (pr.unit_amount || 0) / 100, intv = (pr.recurring && pr.recurring.interval) || '?';
+      const label = pr.nickname || `${amt}€/${intv === 'year' ? 'an' : intv === 'month' ? 'mois' : intv}`;
+      const m = planMap[label] || (planMap[label] = { label, count: 0, mrr: 0 });
+      m.count++; m.mrr += intv === 'year' ? amt / 12 : amt;
+    }
+    const planMix = Object.values(planMap).sort((a, b) => b.mrr - a.mrr).map((p) => ({ label: p.label, count: p.count, mrr: Math.round(p.mrr) }));
+
     // --- Trafic PostHog (non bloquant : si ça échoue, Stripe reste servi) ---
     let traffic = null, trafficDays = null;
     if (PH_KEY) {
@@ -473,6 +518,9 @@ async function refresh() {
         d30: winData('d30', T.d30),
         days,
         tx,
+        cohorts,
+        trends,
+        planMix,
         nowSec: Math.floor(T.now),
         monthlyCosts: MONTHLY_COSTS,
         monthlyTotal: MONTHLY_TOTAL,
