@@ -330,32 +330,12 @@ async function refresh() {
       feeByDay[key] = (feeByDay[key] || 0) + fee;
     }
 
-    // --- Coût Claude (déjà chargé en parallèle : claudeUsd) → € par jour + par fenêtre ---
-    const claudeEurByDay = {};
-    const claudeWin = { today: 0, d7: 0, d30: 0 };
-    if (claudeUsd) for (const [day, v] of Object.entries(claudeUsd)) {
-      claudeEurByDay[day] = v * EUR_PER_USD;
-      const ts = Date.parse(day + 'T00:00:00Z') / 1000;
-      for (const k of Object.keys(W)) if (ts >= W[k] - 86400) claudeWin[k] += v * EUR_PER_USD;
-    }
-
-    // --- Coût fal.ai (déjà chargé en parallèle : falUsd) → € par jour + par fenêtre ---
-    const falEurByDay = {};
-    const falWin = { today: 0, d7: 0, d30: 0 };
-    if (falUsd) for (const [day, v] of Object.entries(falUsd)) {
-      falEurByDay[day] = v * EUR_PER_USD;
-      const ts = Date.parse(day + 'T00:00:00Z') / 1000;
-      for (const k of Object.keys(W)) if (ts >= W[k] - 86400) falWin[k] += v * EUR_PER_USD;
-    }
-
-    // --- Coût OpenAI (déjà chargé : openaiUsd) → € par jour + par fenêtre ---
-    const openaiEurByDay = {};
-    const openaiWin = { today: 0, d7: 0, d30: 0 };
-    if (openaiUsd) for (const [day, v] of Object.entries(openaiUsd)) {
-      openaiEurByDay[day] = v * EUR_PER_USD;
-      const ts = Date.parse(day + 'T00:00:00Z') / 1000;
-      for (const k of Object.keys(W)) if (ts >= W[k] - 86400) openaiWin[k] += v * EUR_PER_USD;
-    }
+    // --- Coûts IA (Claude/fal/OpenAI déjà chargés) → € par jour. Fenêtres calculées plus bas, par jour Paris (comme signups & le détail par jour) → pas de double-comptage. ---
+    const claudeEurByDay = {}, falEurByDay = {}, openaiEurByDay = {};
+    if (claudeUsd) for (const [day, v] of Object.entries(claudeUsd)) claudeEurByDay[day] = v * EUR_PER_USD;
+    if (falUsd) for (const [day, v] of Object.entries(falUsd)) falEurByDay[day] = v * EUR_PER_USD;
+    if (openaiUsd) for (const [day, v] of Object.entries(openaiUsd)) openaiEurByDay[day] = v * EUR_PER_USD;
+    const claudeWin = { today: 0, d7: 0, d30: 0 }, falWin = { today: 0, d7: 0, d30: 0 }, openaiWin = { today: 0, d7: 0, d30: 0 };
 
     // --- Coûts fixes mensuels répartis par jour/fenêtre ---
     const fixedDay = MONTHLY_TOTAL / DAYS_MO;
@@ -366,11 +346,13 @@ async function refresh() {
     // --- Créations de compte (Supabase) → fenêtres (par jour calendaire Paris) ---
     const signupsByDay = supaSignups || null;
     const signupsWin = { today: 0, d7: 0, d30: 0 };
-    if (signupsByDay) for (let i = 0; i < 30; i++) {
-      const v = signupsByDay[dk(T.now - i * 86400)] || 0;
-      if (i === 0) signupsWin.today += v;
-      if (i < 7) signupsWin.d7 += v;
-      signupsWin.d30 += v;
+    for (let i = 0; i < 30; i++) {
+      const key = dk(T.now - i * 86400);
+      const sv = signupsByDay ? (signupsByDay[key] || 0) : 0;
+      const cv = claudeEurByDay[key] || 0, fv = falEurByDay[key] || 0, ov = openaiEurByDay[key] || 0;
+      if (i === 0) { signupsWin.today += sv; claudeWin.today += cv; falWin.today += fv; openaiWin.today += ov; }
+      if (i < 7) { signupsWin.d7 += sv; claudeWin.d7 += cv; falWin.d7 += fv; openaiWin.d7 += ov; }
+      signupsWin.d30 += sv; claudeWin.d30 += cv; falWin.d30 += fv; openaiWin.d30 += ov;
     }
     const dayAgg = {};
     const dget = (k) => (dayAgg[k] || (dayAgg[k] = { rev: 0, sales: 0, fails: 0, refund: 0, newSales: 0, newRev: 0, renews: 0, renRev: 0, disputes: 0, disputeAmt: 0, news: 0, cancels: 0 }));
@@ -413,6 +395,26 @@ async function refresh() {
         margin: r2(rev - refund - dispAmt - (feeByDay[key] || 0) - (claudeEurByDay[key] || 0) - (falEurByDay[key] || 0) - (openaiEurByDay[key] || 0) - fixedDay),
       };
     }
+
+    // --- Détail des ventes (pour l'ouverture au clic) : une ligne par facture payée ---
+    const cleanPlan = (s) => (s || '').replace(/^\s*\d+\s*×\s*/, '').trim(); // "1 × Creator (at €39.00 / month)" → "Creator (at €39.00 / month)"
+    const tx = [];
+    for (const inv of invoices) {
+      if (inv.currency !== 'eur') continue;
+      const amt = (inv.amount_paid || 0) / 100;
+      if (amt <= 0) continue;
+      const t = invPaid(inv);
+      const ln = ((inv.lines || {}).data || [])[0] || {};
+      tx.push({
+        t, d: dk(t),
+        email: inv.customer_email || '',
+        amt: r2(amt),
+        type: inv.billing_reason === 'subscription_create' ? 'new' : 'renew',
+        reason: inv.billing_reason || '',
+        plan: cleanPlan(ln.description) || (amt + ' €'),
+      });
+    }
+    tx.sort((a, b) => b.t - a.t);
 
     // --- Trafic PostHog (non bloquant : si ça échoue, Stripe reste servi) ---
     let traffic = null, trafficDays = null;
@@ -470,6 +472,8 @@ async function refresh() {
         d7: winData('d7', T.d7),
         d30: winData('d30', T.d30),
         days,
+        tx,
+        nowSec: Math.floor(T.now),
         monthlyCosts: MONTHLY_COSTS,
         monthlyTotal: MONTHLY_TOTAL,
         minDay: dk(T.now - (HISTORY_DAYS - 1) * 86400),

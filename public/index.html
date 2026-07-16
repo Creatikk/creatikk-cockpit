@@ -63,6 +63,22 @@
   .panel h3 em{font-style:normal;color:var(--faint);font-size:11.5px;font-weight:600}
   .bars{display:flex;align-items:flex-end;gap:3px;height:90px}
   .bars .b{flex:1;background:var(--grad);opacity:.85;border-radius:3px 3px 1px 1px;min-height:2px}
+  /* carte ventes cliquable + détail */
+  .kpi.click{cursor:pointer;transition:border-color .15s,transform .05s}
+  .kpi.click:hover{border-color:var(--muted)}
+  .kpi.click:active{transform:scale(.995)}
+  .kpi .hint{position:absolute;top:10px;right:11px;font-size:10px;color:var(--faint)}
+  .txlist{display:flex;flex-direction:column;gap:1px;max-height:420px;overflow-y:auto}
+  .txrow{display:grid;grid-template-columns:78px 1.5fr 1fr auto 96px;align-items:center;gap:10px;padding:8px 6px;border-bottom:1px solid var(--line);font-size:12.5px}
+  .txrow:last-child{border-bottom:none}
+  .txbadge{font-size:10px;font-weight:700;text-align:center;padding:3px 0;border-radius:6px}
+  .txbadge.new{background:rgba(0,187,247,.14);color:#59d3ff}
+  .txbadge.renew{background:rgba(155,92,255,.14);color:#c3a3ff}
+  .txmail{color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .txplan{color:var(--faint);font-size:11.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .txamt{font-weight:700;text-align:right;font-variant-numeric:tabular-nums}
+  .txtime{color:var(--faint);font-size:11px;text-align:right}
+  @media(max-width:700px){.txrow{grid-template-columns:64px 1fr 72px}.txplan,.txtime{display:none}}
   .alert{display:flex;align-items:center;gap:10px;background:rgba(255,92,122,.08);border:1px solid rgba(255,92,122,.3);border-radius:12px;padding:12px 14px;margin-top:14px;font-size:13px;color:#ffd3dc}
   .alert.warn{background:rgba(246,181,61,.08);border-color:rgba(246,181,61,.3);color:#ffe6b8}
   .foot{margin-top:26px;text-align:center;color:var(--faint);font-size:11px;line-height:1.7}
@@ -88,12 +104,22 @@
 const F = new Intl.NumberFormat('fr-FR');
 const F2 = new Intl.NumberFormat('fr-FR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 let win = 'today';
+let showTx = false; // détail des ventes ouvert ?
 const WINLABEL = { today: "aujourd'hui", d7: '7 derniers jours', d30: '30 derniers jours' };
 const MOIS = ['janv.','févr.','mars','avr.','mai','juin','juil.','août','sept.','oct.','nov.','déc.'];
 const isDay = (k) => /^\d{4}-\d{2}-\d{2}$/.test(k);
 function winLabel(k){ if (WINLABEL[k]) return WINLABEL[k]; const [y,m,dd]=k.split('-'); return `${+dd} ${MOIS[+m-1]} ${y}`; }
 
 function money(n){ return F2.format(+n||0) + ' €'; }
+function txTime(t){ const dt=new Date(t*1000); const h=String(dt.getHours()).padStart(2,'0'), mi=String(dt.getMinutes()).padStart(2,'0'); return `${dt.getDate()} ${MOIS[dt.getMonth()]} · ${h}:${mi}`; }
+// transactions de la fenêtre courante
+function txForWin(d){
+  const tx = d.tx || [];
+  if (isDay(win)) return tx.filter(x => x.d === win);
+  if (win === 'today') return tx.filter(x => x.d === d.maxDay);
+  const from = (d.nowSec || 0) - (win === 'd7' ? 7 : 30) * 86400;
+  return tx.filter(x => x.t >= from);
+}
 
 function render(d){
   const dayMode = isDay(win);
@@ -136,12 +162,24 @@ function render(d){
     <div class="win">Fenêtre : <b style="color:var(--muted)">${winLabel(win)}</b>${dayMode?' · un seul jour':''}</div>
 
     <div class="kpis">
-      <div class="kpi good"><div class="lab">💶 Ventes</div><div class="val tnum">${money(w.rev)}</div><div class="note">${w.newSales} nouvelle${w.newSales>1?'s':''} · ${w.renews} renouv.</div></div>
+      <div class="kpi good click" id="salescard"><div class="hint">${showTx?'▲ fermer':'▼ détail'}</div><div class="lab">💶 Ventes</div><div class="val tnum">${money(w.rev)}</div><div class="note">${w.newSales} nouvelle${w.newSales>1?'s':''} · ${w.renews} renouv.</div></div>
       <div class="kpi"><div class="lab">🆕 Nouveaux abonnés</div><div class="val tnum">+${w.news}</div><div class="note">${winLabel(win)}</div></div>
       <div class="kpi ${w.cancels>w.news?'crit':''}"><div class="lab">📉 Résiliations</div><div class="val tnum">−${w.cancels}</div><div class="note">${winLabel(win)}</div></div>
       <div class="kpi"><div class="lab">🔄 Net</div><div class="val tnum">${(w.news-w.cancels)>=0?'+':''}${w.news-w.cancels}</div><div class="note">nouveaux − partis</div></div>
       <div class="kpi ${w.fails>0?'crit':''}"><div class="lab">❌ Paiements échoués</div><div class="val tnum">${w.fails}</div><div class="note">${winLabel(win)}</div></div>
     </div>
+
+    ${showTx?(()=>{const list=txForWin(d);const sum=list.reduce((a,x)=>a+x.amt,0);return `
+    <div class="panel">
+      <h3>🧾 Détail des ventes · ${winLabel(win)} <em>${list.length} paiement${list.length>1?'s':''} · ${money(sum)}</em></h3>
+      ${list.length?`<div class="txlist">${list.map(x=>`<div class="txrow">
+        <span class="txbadge ${x.type}">${x.type==='new'?'Nouvelle':'Renouv'}</span>
+        <span class="txmail" title="${x.email}">${x.email||'—'}</span>
+        <span class="txplan">${x.plan}</span>
+        <span class="txamt">${money(x.amt)}</span>
+        <span class="txtime">${txTime(x.t)}</span>
+      </div>`).join('')}</div>`:'<div style="color:var(--faint);font-size:12px;padding:6px">Aucun paiement sur cette fenêtre.</div>'}
+    </div>`;})():''}
 
     ${alerts}
 
@@ -199,6 +237,7 @@ function render(d){
     </div>
   `;
   document.querySelectorAll('.seg button').forEach(b=>b.onclick=()=>{win=b.dataset.w;render(window._d);});
+  const sc=document.getElementById('salescard'); if(sc) sc.onclick=()=>{ showTx=!showTx; render(window._d); };
   const dp=document.getElementById('daypick'); if(dp) dp.onchange=()=>{ if(dp.value){ win=dp.value; render(window._d); } };
   const cd=document.getElementById('clearday'); if(cd) cd.onclick=()=>{ win='today'; render(window._d); };
 }
