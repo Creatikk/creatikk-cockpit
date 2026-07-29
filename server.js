@@ -97,6 +97,8 @@ function phQuery(hogql) {
     req.end(body);
   });
 }
+// Ne compter QUE le vrai site (creatikk.io) — exclut dev.creatikk.io / localhost (tests de Joseph & Julien qui gonflaient les chiffres).
+const PH_HOST_FILTER = `properties.$host IN ('creatikk.io','www.creatikk.io')`;
 async function phTraffic(windowClause) {
   const q = `SELECT
       countIf(event='$pageview') AS visits,
@@ -104,7 +106,7 @@ async function phTraffic(windowClause) {
       countIf(event='tunnel_started') AS tunnelStart,
       countIf(event='dashboard_opened') AS reachedProduct,
       countIf(event='first_video_created') AS firstVideo
-    FROM events WHERE ${windowClause}`;
+    FROM events WHERE ${PH_HOST_FILTER} AND (${windowClause})`;
   const r = await phQuery(q);
   const row = (r && r[0]) || [0, 0, 0, 0, 0];
   return { visits: +row[0] || 0, visitors: +row[1] || 0, tunnelStart: +row[2] || 0, reachedProduct: +row[3] || 0, firstVideo: +row[4] || 0 };
@@ -476,7 +478,7 @@ async function refresh() {
         const rows = await phQuery(`SELECT toString(toDate(toTimeZone(timestamp, 'Europe/Paris'))) AS d,
             countIf(event='$pageview') AS v, uniqIf(person_id, event='$pageview') AS vi,
             countIf(event='tunnel_started') AS ts, countIf(event='dashboard_opened') AS rp, countIf(event='first_video_created') AS fv
-          FROM events WHERE timestamp > now() - interval ${HISTORY_DAYS + 1} day GROUP BY d`);
+          FROM events WHERE ${PH_HOST_FILTER} AND timestamp > now() - interval ${HISTORY_DAYS + 1} day GROUP BY d`);
         trafficDays = {};
         for (const r of rows) trafficDays[r[0]] = { visits: +r[1] || 0, visitors: +r[2] || 0, tunnelStart: +r[3] || 0, reachedProduct: +r[4] || 0, firstVideo: +r[5] || 0 };
       } catch (e) { console.log('posthog ERR', String(e && e.message || e)); }
