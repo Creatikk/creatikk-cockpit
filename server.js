@@ -112,18 +112,32 @@ async function phTraffic(windowClause) {
   return { visits: +row[0] || 0, visitors: +row[1] || 0, tunnelStart: +row[2] || 0, reachedProduct: +row[3] || 0, firstVideo: +row[4] || 0 };
 }
 
-// --- Funnel tunnel : combien voient chaque écran + où chaque personne S'ARRÊTE (dernier écran vu) ---
+// --- Funnel tunnel : chaque écran dans son ordre RÉEL (mesuré : temps moyen depuis l'entrée),
+// combien le voient (total + par parcours debutant/pro), et où chaque personne S'ARRÊTE (dernier écran vu).
 async function phTunnel(windowClause) {
-  const seen = await phQuery(`SELECT properties.step AS step, uniq(person_id) AS people
-    FROM events WHERE event='tunnel_step_viewed' AND ${PH_HOST_FILTER} AND (${windowClause}) GROUP BY step`);
-  const drop = await phQuery(`SELECT last_step, count() AS n FROM (
-      SELECT person_id, argMax(properties.step, timestamp) AS last_step
-      FROM events WHERE event='tunnel_step_viewed' AND ${PH_HOST_FILTER} AND (${windowClause}) GROUP BY person_id
-    ) GROUP BY last_step`);
-  const out = { seen: {}, drop: {} };
-  for (const r of (seen || [])) out.seen[r[0]] = +r[1] || 0;
-  for (const r of (drop || [])) out.drop[r[0]] = +r[1] || 0;
-  return out;
+  const base = `event='tunnel_step_viewed' AND ${PH_HOST_FILTER} AND (${windowClause})`;
+  const seen = await phQuery(`SELECT s.step AS step, uniq(s.pid) AS people,
+      uniqIf(s.pid, s.path='debutant') AS deb, uniqIf(s.pid, s.path='pro') AS pro,
+      round(avg(s.ts - st.start)) AS ord
+    FROM (SELECT person_id AS pid, properties.step AS step, any(properties.path) AS path, min(timestamp) AS ts
+          FROM events WHERE ${base} GROUP BY person_id, properties.step) AS s
+    JOIN (SELECT person_id AS pid, min(timestamp) AS start FROM events WHERE ${base} GROUP BY person_id) AS st
+      ON s.pid = st.pid
+    GROUP BY s.step ORDER BY ord`);
+  const drop = await phQuery(`SELECT t.last_step AS step, count() AS n,
+      countIf(t.path='debutant') AS deb, countIf(t.path='pro') AS pro
+    FROM (SELECT person_id, argMax(properties.step, timestamp) AS last_step, argMax(properties.path, timestamp) AS path
+          FROM events WHERE ${base} GROUP BY person_id) AS t
+    GROUP BY t.last_step`);
+  const steps = (seen || []).map((r) => ({ step: r[0], people: +r[1] || 0, deb: +r[2] || 0, pro: +r[3] || 0, drop: 0, dropDeb: 0, dropPro: 0 }));
+  const idx = {}; steps.forEach((s) => (idx[s.step] = s));
+  let pathDeb = 0, pathPro = 0;
+  for (const r of (drop || [])) {
+    pathDeb += +r[2] || 0; pathPro += +r[3] || 0;
+    const s = idx[r[0]];
+    if (s) { s.drop = +r[1] || 0; s.dropDeb = +r[2] || 0; s.dropPro = +r[3] || 0; }
+  }
+  return { steps, pathDeb, pathPro };
 }
 
 // --- Coût Claude (usage_report Anthropic × prix — FIABLE, isole le produit de Claude Code) ---

@@ -103,6 +103,10 @@
   .fd{font-size:11.5px;color:var(--crit);font-variant-numeric:tabular-nums}
   .fd b{font-weight:700}
   @media(max-width:700px){.funhead,.funrow{grid-template-columns:130px 1fr 64px}}
+  .funchips{display:flex;align-items:center;gap:7px;flex-wrap:wrap;margin-bottom:12px}
+  .funchips button{background:var(--bg2);border:1px solid var(--line);color:var(--muted);font-size:11.5px;font-weight:600;padding:5px 11px;border-radius:99px;cursor:pointer}
+  .funchips button.on{background:var(--grad);color:#fff;border-color:transparent}
+  .funinfo{font-size:11px;color:var(--faint);margin-left:auto}
   .alert{display:flex;align-items:center;gap:10px;background:rgba(255,92,122,.08);border:1px solid rgba(255,92,122,.3);border-radius:12px;padding:12px 14px;margin-top:14px;font-size:13px;color:#ffd3dc}
   .alert.warn{background:rgba(246,181,61,.08);border-color:rgba(246,181,61,.3);color:#ffe6b8}
   .foot{margin-top:26px;text-align:center;color:var(--faint);font-size:11px;line-height:1.7}
@@ -152,17 +156,23 @@ function arrow(delta, goodUp){
   return `<span style="color:${good?'var(--good)':'var(--crit)'}">${up?'▲':'▼'} ${up?'+':''}${delta}%</span>`;
 }
 function cohColor(v){ return `rgba(46,213,146,${Math.max(.06, Math.min(.85, v/100)).toFixed(2)})`; } // vert = rétention
-// Ordre + libellés français des écrans du tunnel (id technique → nom compréhensible)
-const TUNNEL_STEPS = [
-  ['hook',"Accueil (1er écran)"],['teaser','Teaser'],['q_level','Quiz · ton niveau'],['q_niche','Quiz · ta niche'],
-  ['niche_help','Aide niche'],['niche_q3','Questions niche'],['niche_suggest','Suggestions niche'],
-  ['q_content','Quiz · ton contenu'],['q_goal','Quiz · ton objectif'],['q_blocker','Quiz · ton blocage'],['q_mindset',"Quiz · ton état d'esprit"],
-  ['loading','Analyse en cours'],['diagnostic','Ton diagnostic'],['manque','Ce qui te manque'],['potential','Ton potentiel'],
-  ['trends','Tendances de ta niche'],['revenue','Tes revenus possibles'],['compare','Avant / après'],['pipeline','Ta machine à contenu'],
-  ['projection','Ta projection'],['testimonials','Témoignages'],['pacte','Ton engagement'],['payoff','Récap du plan'],
-  ['plan_ready','Ton plan est prêt'],['reassure','Réassurance'],['signup','👤 Création de compte'],
-  ['paywall','💳 Écran des prix'],['downsell','Offre −50%'],['notifs','Notifications'],['installapp','Installation app (fin)'],
-];
+// Libellés français des écrans du tunnel (id technique → nom compréhensible).
+// L'ORDRE d'affichage vient du serveur (mesuré sur les vraies sessions), pas de cette liste.
+const STEP_LABELS = {
+  hook:"Accueil (1er écran)", teaser:'Teaser du plan', q_level:'Quiz · « Je débute / Je poste déjà »',
+  q_content:'Quiz · ton contenu', q_blocker:'Quiz · ton blocage', q_goal:'Quiz · ton objectif',
+  q_frequency:'Quiz (pro) · ta fréquence', q_plateau:'Quiz (pro) · ton plateau', q_niche:'Quiz · ta niche',
+  signup:'👤 Création de compte', niche_help:'Niche · aide', niche_q2:'Niche · question 2', niche_q3:'Niche · question 3',
+  niche_loading:'Niche · analyse', niche_suggest:'Niche · suggestions', loading:'Analyse en cours',
+  connect:'🔗 Connexion TikTok/Insta', account_analysis:'📊 Analyse du compte connecté', diagnostic:'Ton diagnostic',
+  potential:'Ton potentiel', trends:'Tendances de ta niche', q_mindset:"Quiz · ton état d'esprit", reassure:'Réassurance',
+  manque:'Ce qui te manque', pipeline:'Ta machine à contenu', payoff:'Récap du plan', projection:'Ta projection',
+  revenue:'Tes revenus possibles', testimonials:'Témoignages', pacte:'Ton engagement', compare:'Avant / après',
+  plan_ready:'Ton plan est prêt', paywall:'💳 Écran des prix', downsell:'Offre −50%',
+  installapp:'Installation app', notifs:'Notifications (fin)',
+};
+const TUNNEL_END_STEPS = new Set(['installapp','notifs']); // écrans de fin : s'arrêter là = avoir fini
+let funPath = 'all'; // filtre parcours du funnel : all | deb | pro
 
 function render(d){
   const dayMode = isDay(win);
@@ -189,29 +199,38 @@ function render(d){
     </div>
     <div style="font-size:11px;color:var(--faint);margin-top:8px">PostHog · uniquement le vrai site (creatikk.io) — les tests (dev/localhost) sont exclus.</div>`;
 
-    // Funnel écran par écran (fenêtres seulement, pas de détail par jour)
+    // Funnel écran par écran (fenêtres seulement, pas de détail par jour). Ordre = mesuré côté serveur.
     const fu = (!dayMode && d.tunnelFunnel) ? d.tunnelFunnel[win] : null;
-    if (fu && Object.keys(fu.seen||{}).length){
-      const known = new Set(TUNNEL_STEPS.map(s=>s[0]));
-      const steps = TUNNEL_STEPS.concat(Object.keys(fu.seen).filter(k=>!known.has(k)).map(k=>[k,k]));
-      const rows = steps.filter(([id])=> (fu.seen[id]||0)>0 || (fu.drop[id]||0)>0);
-      const maxSeen = Math.max(1, ...rows.map(([id])=>fu.seen[id]||0));
-      // la plus grosse fuite (hors dernier écran = fin normale)
-      let leak=null;
-      for (const [id,label] of rows){ if(id==='installapp') continue; const n=fu.drop[id]||0; if(!leak||n>leak.n) leak={id,label,n}; }
-      const entered = fu.seen['hook']||maxSeen, finished = fu.drop['installapp']||0;
+    if (fu && (fu.steps||[]).length){
+      const pick = (s) => funPath==='deb' ? {n:s.deb, dr:s.dropDeb} : funPath==='pro' ? {n:s.pro, dr:s.dropPro} : {n:s.people, dr:s.drop};
+      const rows = fu.steps.filter(s => pick(s).n>0 || pick(s).dr>0);
+      const maxSeen = Math.max(1, ...rows.map(s=>pick(s).n));
+      let leak=null, finished=0;
+      for (const s of rows){
+        const {dr}=pick(s);
+        if (TUNNEL_END_STEPS.has(s.step)) { finished += dr; continue; }
+        if (dr && (!leak || dr>leak.n)) leak={id:s.step, label:STEP_LABELS[s.step]||s.step, n:dr};
+      }
+      const entered = funPath==='deb' ? fu.pathDeb : funPath==='pro' ? fu.pathPro : (fu.pathDeb + fu.pathPro);
+      const connectSeen = (fu.steps.find(s=>s.step==='connect')||{}), analyzed = (fu.steps.find(s=>s.step==='account_analysis')||{});
       trafficHtml += `
       <div class="panel">
-        <h3>🚪 Le tunnel, écran par écran <em>${F.format(entered)} entrés · ${F.format(finished)} arrivés au bout${leak&&leak.n?` · fuite n°1 : ${leak.label}`:''}</em></h3>
-        <div class="funhead"><span>Écran</span><span>Personnes qui le voient</span><span>Partis ici</span></div>
-        ${rows.map(([id,label])=>{
-          const seen=fu.seen[id]||0, drop=fu.drop[id]||0, isEnd=id==='installapp';
-          return `<div class="funrow ${leak&&leak.id===id&&drop?'leak':''}">
-            <span class="fl" title="${id}">${label}</span>
-            <span class="fb"><i style="width:${Math.max(2,Math.round(seen/maxSeen*100))}%"></i><b>${F.format(seen)}</b></span>
-            <span class="fd">${isEnd?`<b style="color:var(--good)">✅ ${F.format(drop)}</b>`:(drop?`<b>−${F.format(drop)}</b>`:'·')}</span>
+        <h3>🚪 Le tunnel, écran par écran <em>${F.format(entered)} entrés · ${F.format(finished)} au bout${leak&&leak.n?` · fuite n°1 : ${leak.label}`:''}</em></h3>
+        <div class="funchips">
+          <button data-fp="all" class="${funPath==='all'?'on':''}">Tous (${F.format(fu.pathDeb+fu.pathPro)})</button>
+          <button data-fp="deb" class="${funPath==='deb'?'on':''}">🌱 « Je débute » (${F.format(fu.pathDeb)})</button>
+          <button data-fp="pro" class="${funPath==='pro'?'on':''}">🚀 « Je poste déjà » (${F.format(fu.pathPro)})</button>
+          <span class="funinfo">🔗 écran connexion vu : ${F.format(connectSeen.people||0)} · 📊 comptes analysés : ${F.format(analyzed.people||0)}</span>
+        </div>
+        <div class="funhead"><span>Écran (ordre réel)</span><span>Personnes qui le voient</span><span>Partis ici</span></div>
+        ${rows.map(s=>{
+          const {n,dr}=pick(s), isEnd=TUNNEL_END_STEPS.has(s.step);
+          return `<div class="funrow ${leak&&leak.id===s.step&&dr?'leak':''}">
+            <span class="fl" title="${s.step}">${STEP_LABELS[s.step]||s.step}</span>
+            <span class="fb"><i style="width:${Math.max(2,Math.round(n/maxSeen*100))}%"></i><b>${F.format(n)}</b></span>
+            <span class="fd">${isEnd?(dr?`<b style="color:var(--good)">✅ ${F.format(dr)}</b>`:'·'):(dr?`<b>−${F.format(dr)}</b>`:'·')}</span>
           </div>`;}).join('')}
-        <div style="font-size:11px;color:var(--faint);margin-top:10px">Lecture : la barre = combien de personnes voient cet écran. « Partis ici » = c'est le DERNIER écran qu'ils ont vu (ils ont quitté là). ✅ sur le dernier écran = ont fini le tunnel. La ligne rouge = ta plus grosse fuite → l'écran à retravailler en priorité.</div>
+        <div style="font-size:11px;color:var(--faint);margin-top:10px">Ordre = celui réellement vécu par tes visiteurs (mesuré). Barre = combien voient l'écran · « Partis ici » = dernier écran vu avant de quitter · ✅ = ont fini. Les écrans « Niche · … », « Quiz (pro) » et « Connexion » n'apparaissent qu'à ceux que ça concerne (branches du tunnel). La ligne rouge = l'écran à retravailler en priorité.</div>
       </div>`;
     }
   }
@@ -334,6 +353,7 @@ function render(d){
   `;
   document.querySelectorAll('.seg button').forEach(b=>b.onclick=()=>{win=b.dataset.w;render(window._d);});
   const sc=document.getElementById('salescard'); if(sc) sc.onclick=()=>{ showTx=!showTx; render(window._d); };
+  document.querySelectorAll('.funchips button').forEach(b=>b.onclick=()=>{ funPath=b.dataset.fp; render(window._d); });
   const dp=document.getElementById('daypick'); if(dp) dp.onchange=()=>{ if(dp.value){ win=dp.value; render(window._d); } };
   const cd=document.getElementById('clearday'); if(cd) cd.onclick=()=>{ win='today'; render(window._d); };
 }
