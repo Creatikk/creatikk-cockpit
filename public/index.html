@@ -103,6 +103,7 @@
   .fd{font-size:11.5px;color:var(--crit);font-variant-numeric:tabular-nums}
   .fd b{font-weight:700}
   @media(max-width:700px){.funhead,.funrow{grid-template-columns:130px 1fr 64px}}
+  .fb .pct{text-decoration:none;font-size:10.5px;color:var(--faint);font-variant-numeric:tabular-nums}
   .funrow.funbr{opacity:.78}
   .funrow.funbr .fl{padding-left:14px}
   .funrow.funbr .fl u{text-decoration:none;color:var(--faint)}
@@ -184,7 +185,16 @@ const STEP_BRANCH = {
   niche_help:'niche', niche_q2:'niche', niche_q3:'niche', niche_loading:'niche', niche_suggest:'niche',
 };
 const BRANCH_LABELS = { pro:'branche « je poste déjà »', niche:'branche aide niche' };
+// ORDRE CANONIQUE du tunnel v2 (établi depuis les parcours réels mesurés — stable, ne bouge plus selon la fenêtre)
+const TUNNEL_ORDER = [
+  'hook','q_level','q_frequency','q_plateau','q_content','q_blocker','q_goal','q_niche',
+  'niche_help','niche_q2','niche_q3','niche_loading','niche_suggest','signup','teaser','loading',
+  'connect','account_analysis','diagnostic','potential','trends','q_mindset','reassure','manque',
+  'pipeline','payoff','projection','revenue','testimonials','pacte','compare','plan_ready',
+  'paywall','downsell','installapp','notifs',
+];
 let funPath = 'all'; // filtre parcours du funnel : all | deb | pro
+let funBranches = false; // afficher les écrans de branche ?
 
 function render(d){
   const dayMode = isDay(win);
@@ -215,7 +225,11 @@ function render(d){
     const fu = (!dayMode && d.tunnelFunnel) ? d.tunnelFunnel[win] : null;
     if (fu && (fu.steps||[]).length){
       const pick = (s) => funPath==='deb' ? {n:s.deb||0, dr:s.dropDeb||0} : funPath==='pro' ? {n:s.pro||0, dr:s.dropPro||0} : {n:s.people||0, dr:s.drop||0};
-      const rows = fu.steps.filter(s => s && s.step && (pick(s).n>0 || pick(s).dr>0));
+      // Ordre canonique fixe + écrans inconnus (nouveaux) ajoutés à la fin — jamais de mélange
+      const byId = {}; (fu.steps||[]).forEach(s=>{ if(s && s.step) byId[s.step]=s; });
+      const orderedIds = TUNNEL_ORDER.filter(id=>byId[id]).concat(Object.keys(byId).filter(id=>!TUNNEL_ORDER.includes(id)));
+      let rows = orderedIds.map(id=>byId[id]).filter(s => pick(s).n>0 || pick(s).dr>0);
+      if (!funBranches) rows = rows.filter(s=>!STEP_BRANCH[s.step]); // branches masquées par défaut
       const maxSeen = Math.max(1, ...rows.map(s=>pick(s).n));
       let leak=null, finished=0;
       for (const s of rows){
@@ -229,20 +243,22 @@ function render(d){
       <div class="panel">
         <h3>🚪 Le tunnel, écran par écran <em>${F.format(entered)} entrés · ${F.format(finished)} au bout${leak&&leak.n?` · fuite n°1 : ${leak.label}`:''}</em></h3>
         <div class="funchips">
-          <button data-fp="all" class="${funPath==='all'?'on':''}">Tous (${F.format(fu.pathDeb+fu.pathPro)})</button>
-          <button data-fp="deb" class="${funPath==='deb'?'on':''}">🌱 « Je débute » (${F.format(fu.pathDeb)})</button>
-          <button data-fp="pro" class="${funPath==='pro'?'on':''}">🚀 « Je poste déjà » (${F.format(fu.pathPro)})</button>
+          <button data-fp="all" class="${funPath==='all'?'on':''}">Tous (${F.format((fu.pathDeb||0)+(fu.pathPro||0))})</button>
+          <button data-fp="deb" class="${funPath==='deb'?'on':''}">🌱 « Je débute » (${F.format(fu.pathDeb||0)})</button>
+          <button data-fp="pro" class="${funPath==='pro'?'on':''}">🚀 « Je poste déjà » (${F.format(fu.pathPro||0)})</button>
+          <button id="funbr-toggle" class="${funBranches?'on':''}">${funBranches?'Masquer':'Voir'} les écrans de branche</button>
           <span class="funinfo">🔗 écran connexion vu : ${F.format(connectSeen.people||0)} · 📊 comptes analysés : ${F.format(analyzed.people||0)}</span>
         </div>
-        <div class="funhead"><span>Écran (ordre réel)</span><span>Personnes qui le voient</span><span>Partis ici</span></div>
+        <div class="funhead"><span>Écran (dans l'ordre)</span><span>Combien arrivent jusqu'ici</span><span>Partis ici</span></div>
         ${rows.map(s=>{
           const {n,dr}=pick(s), isEnd=TUNNEL_END_STEPS.has(s.step), br=STEP_BRANCH[s.step];
+          const pct = entered ? Math.round(n/entered*100) : 0;
           return `<div class="funrow ${br?'funbr':''} ${leak&&leak.id===s.step&&dr?'leak':''}">
             <span class="fl" title="${s.step}">${br?'<u>↳</u> ':''}${STEP_LABELS[s.step]||s.step}${br?` <em>${BRANCH_LABELS[br]||br}</em>`:''}</span>
-            <span class="fb"><i style="width:${Math.max(2,Math.round(n/maxSeen*100))}%"></i><b>${F.format(n)}</b></span>
+            <span class="fb"><i style="width:${Math.max(2,Math.round(n/maxSeen*100))}%"></i><b>${F.format(n)}</b>${br?'':`<u class="pct">${pct}%</u>`}</span>
             <span class="fd">${isEnd?(dr?`<b style="color:var(--good)">✅ ${F.format(dr)}</b>`:'·'):(dr?`<b>−${F.format(dr)}</b>`:'·')}</span>
           </div>`;}).join('')}
-        <div style="font-size:11px;color:var(--faint);margin-top:10px">Ordre = celui réellement vécu par tes visiteurs (mesuré). Barre = combien voient l'écran · « Partis ici » = dernier écran vu avant de quitter · ✅ = ont fini. <b style="color:var(--muted)">↳ = écran de branche</b> : seule une partie des gens le voit (le tunnel se sépare puis se rejoint) — normal que sa barre soit plus courte que la suite. La ligne rouge = l'écran à retravailler en priorité.</div>
+        <div style="font-size:11px;color:var(--faint);margin-top:10px">Se lit de haut en bas : à chaque écran, combien de personnes sont encore là (le % = par rapport aux entrés). « Partis ici » = dernier écran vu avant d'abandonner · ✅ = ont fini le tunnel. La <b style="color:var(--crit)">ligne rouge</b> = ta plus grosse fuite, l'écran à retravailler en priorité. Le bouton « écrans de branche » affiche les étapes que seule une partie des gens voit (aide au choix de niche, parcours « je poste déjà »).</div>
       </div>`;
     }
   }
@@ -365,7 +381,8 @@ function render(d){
   `;
   document.querySelectorAll('.seg button').forEach(b=>b.onclick=()=>{win=b.dataset.w;render(window._d);});
   const sc=document.getElementById('salescard'); if(sc) sc.onclick=()=>{ showTx=!showTx; render(window._d); };
-  document.querySelectorAll('.funchips button').forEach(b=>b.onclick=()=>{ funPath=b.dataset.fp; render(window._d); });
+  document.querySelectorAll('.funchips button[data-fp]').forEach(b=>b.onclick=()=>{ funPath=b.dataset.fp; render(window._d); });
+  const fbt=document.getElementById('funbr-toggle'); if(fbt) fbt.onclick=()=>{ funBranches=!funBranches; render(window._d); };
   const dp=document.getElementById('daypick'); if(dp) dp.onchange=()=>{ if(dp.value){ win=dp.value; render(window._d); } };
   const cd=document.getElementById('clearday'); if(cd) cd.onclick=()=>{ win='today'; render(window._d); };
 }
