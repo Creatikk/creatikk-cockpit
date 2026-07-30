@@ -501,9 +501,9 @@ async function refresh() {
           phTraffic("timestamp >= toStartOfDay(now(), 'Europe/Paris')"),
           phTraffic('timestamp > now() - interval 7 day'),
           phTraffic('timestamp > now() - interval 30 day'),
-          phTunnel("timestamp >= toStartOfDay(now(), 'Europe/Paris')"),
-          phTunnel('timestamp > now() - interval 7 day'),
-          phTunnel('timestamp > now() - interval 30 day'),
+          phTunnel("timestamp >= toStartOfDay(now(), 'Europe/Paris')").catch((e) => { console.log('funnel today ERR', String(e && e.message || e)); return null; }),
+          phTunnel('timestamp > now() - interval 7 day').catch((e) => { console.log('funnel d7 ERR', String(e && e.message || e)); return null; }),
+          phTunnel('timestamp > now() - interval 30 day').catch((e) => { console.log('funnel d30 ERR', String(e && e.message || e)); return null; }),
         ]);
         traffic = { today: tToday, d7: t7, d30: t30 };
         tunnelFunnel = { today: fToday, d7: f7, d30: f30 };

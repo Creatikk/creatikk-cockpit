@@ -103,6 +103,12 @@
   .fd{font-size:11.5px;color:var(--crit);font-variant-numeric:tabular-nums}
   .fd b{font-weight:700}
   @media(max-width:700px){.funhead,.funrow{grid-template-columns:130px 1fr 64px}}
+  .funrow.funbr{opacity:.78}
+  .funrow.funbr .fl{padding-left:14px}
+  .funrow.funbr .fl u{text-decoration:none;color:var(--faint)}
+  .funrow.funbr .fl em{font-style:normal;font-size:9.5px;color:var(--faint);background:var(--bg2);border:1px solid var(--line);border-radius:5px;padding:1px 5px;margin-left:5px;vertical-align:1px}
+  .funrow.funbr .fb i{opacity:.5}
+  @media(max-width:700px){.funrow.funbr .fl em{display:none}}
   .funchips{display:flex;align-items:center;gap:7px;flex-wrap:wrap;margin-bottom:12px}
   .funchips button{background:var(--bg2);border:1px solid var(--line);color:var(--muted);font-size:11.5px;font-weight:600;padding:5px 11px;border-radius:99px;cursor:pointer}
   .funchips button.on{background:var(--grad);color:#fff;border-color:transparent}
@@ -172,6 +178,12 @@ const STEP_LABELS = {
   installapp:'Installation app', notifs:'Notifications (fin)',
 };
 const TUNNEL_END_STEPS = new Set(['installapp','notifs']); // écrans de fin : s'arrêter là = avoir fini
+// Écrans de BRANCHE (vus seulement par une partie des gens) — à ne pas comparer au tronc commun
+const STEP_BRANCH = {
+  q_frequency:'pro', q_plateau:'pro', connect:'pro', account_analysis:'pro',
+  niche_help:'niche', niche_q2:'niche', niche_q3:'niche', niche_loading:'niche', niche_suggest:'niche',
+};
+const BRANCH_LABELS = { pro:'branche « je poste déjà »', niche:'branche aide niche' };
 let funPath = 'all'; // filtre parcours du funnel : all | deb | pro
 
 function render(d){
@@ -202,8 +214,8 @@ function render(d){
     // Funnel écran par écran (fenêtres seulement, pas de détail par jour). Ordre = mesuré côté serveur.
     const fu = (!dayMode && d.tunnelFunnel) ? d.tunnelFunnel[win] : null;
     if (fu && (fu.steps||[]).length){
-      const pick = (s) => funPath==='deb' ? {n:s.deb, dr:s.dropDeb} : funPath==='pro' ? {n:s.pro, dr:s.dropPro} : {n:s.people, dr:s.drop};
-      const rows = fu.steps.filter(s => pick(s).n>0 || pick(s).dr>0);
+      const pick = (s) => funPath==='deb' ? {n:s.deb||0, dr:s.dropDeb||0} : funPath==='pro' ? {n:s.pro||0, dr:s.dropPro||0} : {n:s.people||0, dr:s.drop||0};
+      const rows = fu.steps.filter(s => s && s.step && (pick(s).n>0 || pick(s).dr>0));
       const maxSeen = Math.max(1, ...rows.map(s=>pick(s).n));
       let leak=null, finished=0;
       for (const s of rows){
@@ -211,7 +223,7 @@ function render(d){
         if (TUNNEL_END_STEPS.has(s.step)) { finished += dr; continue; }
         if (dr && (!leak || dr>leak.n)) leak={id:s.step, label:STEP_LABELS[s.step]||s.step, n:dr};
       }
-      const entered = funPath==='deb' ? fu.pathDeb : funPath==='pro' ? fu.pathPro : (fu.pathDeb + fu.pathPro);
+      const entered = funPath==='deb' ? (fu.pathDeb||0) : funPath==='pro' ? (fu.pathPro||0) : ((fu.pathDeb||0) + (fu.pathPro||0));
       const connectSeen = (fu.steps.find(s=>s.step==='connect')||{}), analyzed = (fu.steps.find(s=>s.step==='account_analysis')||{});
       trafficHtml += `
       <div class="panel">
@@ -224,13 +236,13 @@ function render(d){
         </div>
         <div class="funhead"><span>Écran (ordre réel)</span><span>Personnes qui le voient</span><span>Partis ici</span></div>
         ${rows.map(s=>{
-          const {n,dr}=pick(s), isEnd=TUNNEL_END_STEPS.has(s.step);
-          return `<div class="funrow ${leak&&leak.id===s.step&&dr?'leak':''}">
-            <span class="fl" title="${s.step}">${STEP_LABELS[s.step]||s.step}</span>
+          const {n,dr}=pick(s), isEnd=TUNNEL_END_STEPS.has(s.step), br=STEP_BRANCH[s.step];
+          return `<div class="funrow ${br?'funbr':''} ${leak&&leak.id===s.step&&dr?'leak':''}">
+            <span class="fl" title="${s.step}">${br?'<u>↳</u> ':''}${STEP_LABELS[s.step]||s.step}${br?` <em>${BRANCH_LABELS[br]||br}</em>`:''}</span>
             <span class="fb"><i style="width:${Math.max(2,Math.round(n/maxSeen*100))}%"></i><b>${F.format(n)}</b></span>
             <span class="fd">${isEnd?(dr?`<b style="color:var(--good)">✅ ${F.format(dr)}</b>`:'·'):(dr?`<b>−${F.format(dr)}</b>`:'·')}</span>
           </div>`;}).join('')}
-        <div style="font-size:11px;color:var(--faint);margin-top:10px">Ordre = celui réellement vécu par tes visiteurs (mesuré). Barre = combien voient l'écran · « Partis ici » = dernier écran vu avant de quitter · ✅ = ont fini. Les écrans « Niche · … », « Quiz (pro) » et « Connexion » n'apparaissent qu'à ceux que ça concerne (branches du tunnel). La ligne rouge = l'écran à retravailler en priorité.</div>
+        <div style="font-size:11px;color:var(--faint);margin-top:10px">Ordre = celui réellement vécu par tes visiteurs (mesuré). Barre = combien voient l'écran · « Partis ici » = dernier écran vu avant de quitter · ✅ = ont fini. <b style="color:var(--muted)">↳ = écran de branche</b> : seule une partie des gens le voit (le tunnel se sépare puis se rejoint) — normal que sa barre soit plus courte que la suite. La ligne rouge = l'écran à retravailler en priorité.</div>
       </div>`;
     }
   }
