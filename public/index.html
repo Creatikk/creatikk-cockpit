@@ -90,6 +90,19 @@
   .cc{padding:6px 0;border-radius:5px;font-variant-numeric:tabular-nums;font-size:11px}
   .cc.empty{background:transparent;color:transparent}
   @media(max-width:760px){.cohort{overflow-x:auto}.chead,.crow{min-width:440px}}
+  /* funnel tunnel écran par écran */
+  .funhead,.funrow{display:grid;grid-template-columns:190px 1fr 84px;gap:10px;align-items:center}
+  .funhead{font-size:10.5px;color:var(--muted);font-weight:600;margin-bottom:8px}
+  .funhead span:last-child,.fd{text-align:right}
+  .funrow{padding:3.5px 4px;border-radius:7px;font-size:12px}
+  .funrow.leak{background:rgba(255,92,122,.09);outline:1px solid rgba(255,92,122,.35)}
+  .fl{color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .fb{display:flex;align-items:center;gap:8px}
+  .fb i{display:block;height:11px;border-radius:3px;background:var(--grad);opacity:.85}
+  .fb b{font-size:11.5px;font-variant-numeric:tabular-nums;color:var(--ink)}
+  .fd{font-size:11.5px;color:var(--crit);font-variant-numeric:tabular-nums}
+  .fd b{font-weight:700}
+  @media(max-width:700px){.funhead,.funrow{grid-template-columns:130px 1fr 64px}}
   .alert{display:flex;align-items:center;gap:10px;background:rgba(255,92,122,.08);border:1px solid rgba(255,92,122,.3);border-radius:12px;padding:12px 14px;margin-top:14px;font-size:13px;color:#ffd3dc}
   .alert.warn{background:rgba(246,181,61,.08);border-color:rgba(246,181,61,.3);color:#ffe6b8}
   .foot{margin-top:26px;text-align:center;color:var(--faint);font-size:11px;line-height:1.7}
@@ -139,6 +152,17 @@ function arrow(delta, goodUp){
   return `<span style="color:${good?'var(--good)':'var(--crit)'}">${up?'▲':'▼'} ${up?'+':''}${delta}%</span>`;
 }
 function cohColor(v){ return `rgba(46,213,146,${Math.max(.06, Math.min(.85, v/100)).toFixed(2)})`; } // vert = rétention
+// Ordre + libellés français des écrans du tunnel (id technique → nom compréhensible)
+const TUNNEL_STEPS = [
+  ['hook',"Accueil (1er écran)"],['teaser','Teaser'],['q_level','Quiz · ton niveau'],['q_niche','Quiz · ta niche'],
+  ['niche_help','Aide niche'],['niche_q3','Questions niche'],['niche_suggest','Suggestions niche'],
+  ['q_content','Quiz · ton contenu'],['q_goal','Quiz · ton objectif'],['q_blocker','Quiz · ton blocage'],['q_mindset',"Quiz · ton état d'esprit"],
+  ['loading','Analyse en cours'],['diagnostic','Ton diagnostic'],['manque','Ce qui te manque'],['potential','Ton potentiel'],
+  ['trends','Tendances de ta niche'],['revenue','Tes revenus possibles'],['compare','Avant / après'],['pipeline','Ta machine à contenu'],
+  ['projection','Ta projection'],['testimonials','Témoignages'],['pacte','Ton engagement'],['payoff','Récap du plan'],
+  ['plan_ready','Ton plan est prêt'],['reassure','Réassurance'],['signup','👤 Création de compte'],
+  ['paywall','💳 Écran des prix'],['downsell','Offre −50%'],['notifs','Notifications'],['installapp','Installation app (fin)'],
+];
 
 function render(d){
   const dayMode = isDay(win);
@@ -163,7 +187,33 @@ function render(d){
       <div class="st"><div class="l">✅ Arrivés au produit</div><div class="v tnum">${F.format(t.reachedProduct)}</div><div class="s">${rate!==null?rate+'% du tunnel':'—'}</div></div>
       <div class="st"><div class="l">🎬 1res vidéos</div><div class="v tnum">${F.format(t.firstVideo)}</div><div class="s">activation</div></div>
     </div>
-    <div style="font-size:11px;color:var(--faint);margin-top:8px">PostHog · quasi vide avant le lancement (navigation de test) — se remplira tout seul.</div>`;
+    <div style="font-size:11px;color:var(--faint);margin-top:8px">PostHog · uniquement le vrai site (creatikk.io) — les tests (dev/localhost) sont exclus.</div>`;
+
+    // Funnel écran par écran (fenêtres seulement, pas de détail par jour)
+    const fu = (!dayMode && d.tunnelFunnel) ? d.tunnelFunnel[win] : null;
+    if (fu && Object.keys(fu.seen||{}).length){
+      const known = new Set(TUNNEL_STEPS.map(s=>s[0]));
+      const steps = TUNNEL_STEPS.concat(Object.keys(fu.seen).filter(k=>!known.has(k)).map(k=>[k,k]));
+      const rows = steps.filter(([id])=> (fu.seen[id]||0)>0 || (fu.drop[id]||0)>0);
+      const maxSeen = Math.max(1, ...rows.map(([id])=>fu.seen[id]||0));
+      // la plus grosse fuite (hors dernier écran = fin normale)
+      let leak=null;
+      for (const [id,label] of rows){ if(id==='installapp') continue; const n=fu.drop[id]||0; if(!leak||n>leak.n) leak={id,label,n}; }
+      const entered = fu.seen['hook']||maxSeen, finished = fu.drop['installapp']||0;
+      trafficHtml += `
+      <div class="panel">
+        <h3>🚪 Le tunnel, écran par écran <em>${F.format(entered)} entrés · ${F.format(finished)} arrivés au bout${leak&&leak.n?` · fuite n°1 : ${leak.label}`:''}</em></h3>
+        <div class="funhead"><span>Écran</span><span>Personnes qui le voient</span><span>Partis ici</span></div>
+        ${rows.map(([id,label])=>{
+          const seen=fu.seen[id]||0, drop=fu.drop[id]||0, isEnd=id==='installapp';
+          return `<div class="funrow ${leak&&leak.id===id&&drop?'leak':''}">
+            <span class="fl" title="${id}">${label}</span>
+            <span class="fb"><i style="width:${Math.max(2,Math.round(seen/maxSeen*100))}%"></i><b>${F.format(seen)}</b></span>
+            <span class="fd">${isEnd?`<b style="color:var(--good)">✅ ${F.format(drop)}</b>`:(drop?`<b>−${F.format(drop)}</b>`:'·')}</span>
+          </div>`;}).join('')}
+        <div style="font-size:11px;color:var(--faint);margin-top:10px">Lecture : la barre = combien de personnes voient cet écran. « Partis ici » = c'est le DERNIER écran qu'ils ont vu (ils ont quitté là). ✅ sur le dernier écran = ont fini le tunnel. La ligne rouge = ta plus grosse fuite → l'écran à retravailler en priorité.</div>
+      </div>`;
+    }
   }
   const maxS = Math.max(1, ...d.spark.map(s=>s.v));
   const bars = d.spark.map(s=>`<div class="b" style="height:${Math.max(2,Math.round(s.v/maxS*100))}%" title="${s.d}: ${money(s.v)}"></div>`).join('');

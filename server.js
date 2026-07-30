@@ -112,6 +112,20 @@ async function phTraffic(windowClause) {
   return { visits: +row[0] || 0, visitors: +row[1] || 0, tunnelStart: +row[2] || 0, reachedProduct: +row[3] || 0, firstVideo: +row[4] || 0 };
 }
 
+// --- Funnel tunnel : combien voient chaque écran + où chaque personne S'ARRÊTE (dernier écran vu) ---
+async function phTunnel(windowClause) {
+  const seen = await phQuery(`SELECT properties.step AS step, uniq(person_id) AS people
+    FROM events WHERE event='tunnel_step_viewed' AND ${PH_HOST_FILTER} AND (${windowClause}) GROUP BY step`);
+  const drop = await phQuery(`SELECT last_step, count() AS n FROM (
+      SELECT person_id, argMax(properties.step, timestamp) AS last_step
+      FROM events WHERE event='tunnel_step_viewed' AND ${PH_HOST_FILTER} AND (${windowClause}) GROUP BY person_id
+    ) GROUP BY last_step`);
+  const out = { seen: {}, drop: {} };
+  for (const r of (seen || [])) out.seen[r[0]] = +r[1] || 0;
+  for (const r of (drop || [])) out.drop[r[0]] = +r[1] || 0;
+  return out;
+}
+
 // --- Coût Claude (usage_report Anthropic × prix — FIABLE, isole le produit de Claude Code) ---
 function anthropicGet(pathq) {
   return new Promise((resolve, reject) => {
@@ -466,15 +480,19 @@ async function refresh() {
     const planMix = Object.values(planMap).sort((a, b) => b.mrr - a.mrr).map((p) => ({ label: p.label, count: p.count, mrr: Math.round(p.mrr) }));
 
     // --- Trafic PostHog (non bloquant : si ça échoue, Stripe reste servi) ---
-    let traffic = null, trafficDays = null;
+    let traffic = null, trafficDays = null, tunnelFunnel = null;
     if (PH_KEY) {
       try {
-        const [tToday, t7, t30] = await Promise.all([
+        const [tToday, t7, t30, fToday, f7, f30] = await Promise.all([
           phTraffic("timestamp >= toStartOfDay(now(), 'Europe/Paris')"),
           phTraffic('timestamp > now() - interval 7 day'),
           phTraffic('timestamp > now() - interval 30 day'),
+          phTunnel("timestamp >= toStartOfDay(now(), 'Europe/Paris')"),
+          phTunnel('timestamp > now() - interval 7 day'),
+          phTunnel('timestamp > now() - interval 30 day'),
         ]);
         traffic = { today: tToday, d7: t7, d30: t30 };
+        tunnelFunnel = { today: fToday, d7: f7, d30: f30 };
         const rows = await phQuery(`SELECT toString(toDate(toTimeZone(timestamp, 'Europe/Paris'))) AS d,
             countIf(event='$pageview') AS v, uniqIf(person_id, event='$pageview') AS vi,
             countIf(event='tunnel_started') AS ts, countIf(event='dashboard_opened') AS rp, countIf(event='first_video_created') AS fv
@@ -510,6 +528,7 @@ async function refresh() {
       data: {
         traffic,
         trafficDays,
+        tunnelFunnel,
         phConnected: !!PH_KEY,
         supaConnected: !!(SUPABASE_URL && SUPABASE_KEY),
         live: {
