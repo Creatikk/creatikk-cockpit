@@ -338,6 +338,20 @@ function render(d){
     <div style="font-size:11px;color:var(--faint);margin-top:8px">Vraies créations de compte (Supabase Auth) vs 1ers paiements (Stripe) sur la fenêtre. Le taux inscrit→payé = ton levier n°1.</div>
     `:''}
 
+    ${(()=>{ // 📬 Mailing (Loops) — les stats fines ne sont pas exposées par l'API Loops → estimation + lien direct
+      const MAILING_START='2026-07-30'; // bascule des nouveaux workflows
+      let relances=0;
+      for (const [k,g] of Object.entries(d.days||{})) if (k>=MAILING_START) relances += Math.max(0,(g.signups||0)-(g.newSales||0));
+      return `
+    <div class="eye">📬 Mailing automatique · Loops</div>
+    <div class="live">
+      <div class="st"><div class="l">🤖 Séquences actives</div><div class="v tnum" style="color:var(--good)">4</div><div class="s">Récupération · Bienvenue · Dunning · Anti-churn</div></div>
+      <div class="st"><div class="l">📨 Entrés en récupération</div><div class="v tnum">~${F.format(relances)}</div><div class="s">inscrits non-payeurs depuis la bascule (30/07)</div></div>
+      <div class="st"><div class="l">⏱ Cadence récup</div><div class="v tnum" style="font-size:15px;padding-top:6px">1h → J+1 → J+3 → J+7</div><div class="s">R3 = offre −50%</div></div>
+      <div class="st"><a href="https://app.loops.so/workflows" target="_blank" style="text-decoration:none;color:inherit;display:block"><div class="l">📊 Stats fines (ouvertures, clics)</div><div class="v" style="font-size:15px;padding-top:6px;color:var(--muted)">Ouvrir Loops ↗</div><div class="s">l'API Loops n'expose pas ces stats</div></a></div>
+    </div>
+    <div style="font-size:11px;color:var(--faint);margin-top:8px">« Entrés en récupération » = estimation (inscrits − payés, depuis l'activation des nouveaux mails le 30/07). Les envois/ouvertures exacts se lisent dans Loops (limitation de leur API).</div>`;})()}
+
     <div class="eye">💰 Recettes · Coûts · Marge · ${winLabel(win)}</div>
     <div class="live">
       <div class="st"><div class="l">💶 Recettes</div><div class="v tnum">${money(w.rev)}</div><div class="s">${w.newSales} nouv · ${w.renews} renouv</div></div>
@@ -385,12 +399,12 @@ function render(d){
 
     <div class="eye">Acquisition créateurs · Whop</div>
     <div class="live">
-      <div class="st" style="opacity:.55"><div class="l">🎬 Vues générées</div><div class="v tnum">—</div><div class="s">dès la v2</div></div>
+      <div class="st" style="opacity:.55"><div class="l">🎬 Vues générées</div><div class="v tnum">—</div><div class="s">branchement en cours</div></div>
       <div class="st" style="opacity:.55"><div class="l">💸 Coût / 1000 vues</div><div class="v tnum">1 $</div><div class="s">payé aux vues</div></div>
       <div class="st" style="opacity:.55"><div class="l">🎯 Coût par inscrit</div><div class="v tnum">—</div><div class="s">vues → inscrits</div></div>
       <div class="st" style="opacity:.55"><div class="l">💰 Coût par vente</div><div class="v tnum">—</div><div class="s">ton vrai CAC</div></div>
     </div>
-    <div style="font-size:11px;color:var(--faint);margin-top:8px">Se branchera quand tes créateurs démarreront (sortie v2).</div>
+    <div style="font-size:11px;color:var(--faint);margin-top:8px">🟢 Campagne lancée — branchement de la vraie data en cours (lien de campagne à fournir).</div>
 
     ${d.cohorts&&d.cohorts.length?`
     <div class="panel">
