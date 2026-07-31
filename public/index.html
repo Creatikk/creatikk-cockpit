@@ -357,6 +357,7 @@ function render(d){
       <div class="st"><div class="l">💶 Recettes</div><div class="v tnum">${money(w.rev)}</div><div class="s">${w.newSales} nouv · ${w.renews} renouv</div></div>
       <div class="st"><div class="l">🏦 Frais Stripe</div><div class="v tnum">−${money(w.stripeFee||0)}</div><div class="s">commissions paiement</div></div>
       <div class="st"><div class="l">🤖 Coûts IA</div><div class="v tnum">−${money((w.aiClaude||0)+(w.aiFal||0)+(w.aiOpenai||0))}</div><div class="s">🧠 ${money(w.aiClaude||0)} · 🎬 ${money(w.aiFal||0)} · ⚡ ${money(w.aiOpenai||0)}</div></div>
+      ${(w.whopCost||0)>0?`<div class="st"><div class="l">🎬 Créateurs (Whop)</div><div class="v tnum">−${money(w.whopCost)}</div><div class="s">payés aux vues</div></div>`:''}
       <div class="st"><div class="l">🏠 Coûts fixes</div><div class="v tnum">−${money(w.fixedCost||0)}</div><div class="s">${d.monthlyTotal?money(d.monthlyTotal)+'/mois':'à configurer'}</div></div>
       <div class="st"><div class="l">↩️ Remb. &amp; litiges</div><div class="v tnum">−${money((w.refund||0)+(w.disputeAmt||0))}</div><div class="s">${money(w.refund||0)} remb · ${money(w.disputeAmt||0)} contestés</div></div>
       <div class="st"><div class="l">📊 Marge</div><div class="v tnum" style="color:${(w.margin||0)>=0?'var(--good)':'var(--crit)'}">${money(w.margin||0)}</div><div class="s">${w.rev?Math.round((w.margin||0)/w.rev*100):0}% des recettes</div></div>
@@ -397,14 +398,22 @@ function render(d){
 
     ${trafficHtml}
 
-    <div class="eye">Acquisition créateurs · Whop</div>
+    <div class="eye">Acquisition créateurs · Whop ${d.whop&&d.whop.connected?'<span style="color:var(--good)">· connecté</span>':''}</div>
+    ${d.whop&&d.whop.connected?(()=>{const wh=d.whop;const dim=(wh.spentUsd||0)>0?'':'opacity:.55';return `
     <div class="live">
-      <div class="st" style="opacity:.55"><div class="l">🎬 Vues générées</div><div class="v tnum">—</div><div class="s">branchement en cours</div></div>
-      <div class="st" style="opacity:.55"><div class="l">💸 Coût / 1000 vues</div><div class="v tnum">1 $</div><div class="s">payé aux vues</div></div>
-      <div class="st" style="opacity:.55"><div class="l">🎯 Coût par inscrit</div><div class="v tnum">—</div><div class="s">vues → inscrits</div></div>
-      <div class="st" style="opacity:.55"><div class="l">💰 Coût par vente</div><div class="v tnum">—</div><div class="s">ton vrai CAC</div></div>
+      <div class="st" style="${dim}"><div class="l">🎬 Vues payées (total)</div><div class="v tnum">${F.format(wh.views||0)}</div><div class="s">à ${wh.ratePer1k}$ / 1000 vues</div></div>
+      <div class="st" style="${dim}"><div class="l">💸 Dépensé · ${winLabel(win)}</div><div class="v tnum">${money(w.whopCost||0)}</div><div class="s">total campagne : ${F.format(wh.spentUsd||0)} $</div></div>
+      <div class="st" style="${dim}"><div class="l">🎯 Coût par inscrit</div><div class="v tnum">${(w.signups&&(w.whopCost||0)>0)?money(w.whopCost/w.signups):'—'}</div><div class="s">dépensé ÷ inscrits (fenêtre)</div></div>
+      <div class="st" style="${dim}"><div class="l">💰 Coût par vente (CAC)</div><div class="v tnum">${(w.newSales&&(w.whopCost||0)>0)?money(w.whopCost/w.newSales):'—'}</div><div class="s">dépensé ÷ nouvelles ventes</div></div>
     </div>
-    <div style="font-size:11px;color:var(--faint);margin-top:8px">🟢 Campagne lancée — branchement de la vraie data en cours (lien de campagne à fournir).</div>
+    <div style="font-size:11px;color:var(--faint);margin-top:8px">${(wh.spentUsd||0)>0?`Données réelles du journal financier Whop (dépenses créateurs). Vues = dépensé × 1000 (tarif ${wh.ratePer1k}$/1000 vues). Le CAC est inclus dans la marge.`:'🟢 Connecté au journal financier Whop — les chiffres apparaîtront automatiquement au premier paiement créateur (aucun payout pour le moment).'}</div>`;})():`
+    <div class="live">
+      <div class="st" style="opacity:.55"><div class="l">🎬 Vues payées</div><div class="v tnum">—</div><div class="s">non connecté</div></div>
+      <div class="st" style="opacity:.55"><div class="l">💸 Dépensé</div><div class="v tnum">—</div><div class="s">clé WHOP_KEY manquante</div></div>
+      <div class="st" style="opacity:.55"><div class="l">🎯 Coût par inscrit</div><div class="v tnum">—</div><div class="s">—</div></div>
+      <div class="st" style="opacity:.55"><div class="l">💰 Coût par vente</div><div class="v tnum">—</div><div class="s">—</div></div>
+    </div>
+    <div style="font-size:11px;color:var(--faint);margin-top:8px">Ajouter la variable WHOP_KEY dans Render pour connecter.</div>`}
 
     ${d.cohorts&&d.cohorts.length?`
     <div class="panel">

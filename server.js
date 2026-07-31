@@ -31,6 +31,13 @@ let OPENAI_ADMIN_KEY = process.env.OPENAI_ADMIN_KEY || '';
 if (!OPENAI_ADMIN_KEY) {
   try { OPENAI_ADMIN_KEY = fs.readFileSync('/private/tmp/claude-501/-Users-julien-Dev-Creatikk/5a7315b3-ef28-4ecf-8333-cabac36b6206/scratchpad/openai_admin_key.txt', 'utf8').trim(); } catch (e) {}
 }
+// Whop : dépenses créateurs (Content Rewards) via le journal financier. Clé lecture "company:balance:read".
+let WHOP_KEY = process.env.WHOP_KEY || '';
+if (!WHOP_KEY) {
+  try { WHOP_KEY = fs.readFileSync('/private/tmp/claude-501/-Users-julien-Dev-Creatikk/5a7315b3-ef28-4ecf-8333-cabac36b6206/scratchpad/whop_key.txt', 'utf8').trim(); } catch (e) {}
+}
+const WHOP_ACCOUNT = process.env.WHOP_ACCOUNT || 'biz_X18qG1YimL74yO';
+const WHOP_RATE_PER_1K = +(process.env.WHOP_RATE_PER_1K || 1); // $ payé aux créateurs pour 1000 vues
 // Supabase : compte les créations de compte (auth.users). URL projet + clé secrète (server-side only, lecture).
 let SUPABASE_URL = process.env.SUPABASE_URL || '';
 if (!SUPABASE_URL) {
@@ -251,6 +258,36 @@ async function supabaseSignupsByDay(histTs) {
   return byDay;
 }
 
+// --- Dépenses créateurs Whop (Content Rewards) : journal financier → sorties d'argent par jour (USD) ---
+function whopGet(pathq) {
+  return new Promise((resolve, reject) => {
+    const opts = { host: 'api.whop.com', path: '/api/v1/' + pathq, method: 'GET', headers: { Authorization: 'Bearer ' + WHOP_KEY } };
+    const req = https.request(opts, (res) => { let d = ''; res.on('data', (c) => (d += c)); res.on('end', () => { try { resolve(JSON.parse(d)); } catch (e) { reject(e); } }); });
+    req.on('error', reject); req.setTimeout(30000, () => req.destroy(new Error('whop timeout'))); req.end();
+  });
+}
+async function whopSpendByDay(sinceISO) {
+  if (!WHOP_KEY) return null;
+  const byDay = {}; let funded = 0, spent = 0, cursor = '';
+  for (let i = 0; i < 20; i++) {
+    const d = await whopGet(`financial-activity?account_id=${WHOP_ACCOUNT}&limit=100&posted_after=${encodeURIComponent(sinceISO)}${cursor ? '&cursor=' + encodeURIComponent(cursor) : ''}`);
+    const rows = (d && d.data) || [];
+    for (const r of rows) {
+      const prec = (r.currency && r.currency.precision != null) ? r.currency.precision : 2;
+      const usd = (+r.amount || 0) / Math.pow(10, prec);
+      if (usd < 0) { // sortie d'argent = paiement créateur (ou frais)
+        spent += -usd;
+        const day = String(r.posted_at || '').slice(0, 10);
+        if (day) byDay[day] = (byDay[day] || 0) + -usd;
+      } else { funded += usd; }
+    }
+    const pi = (d && d.page_info) || {};
+    if (!pi.has_next_page || !pi.end_cursor) break;
+    cursor = pi.end_cursor;
+  }
+  return { byDay, spent, funded };
+}
+
 // --- Bornes de temps (jour Paris) ---
 function dayStartsUTC() {
   const now = Date.now() / 1000;
@@ -279,7 +316,7 @@ async function refresh() {
     const fmtD = (ts) => new Date(ts * 1000).toISOString().slice(0, 10);
     const r2 = (x) => Math.round(x * 100) / 100; // arrondi au centime
     // Tous les appels indépendants EN PARALLÈLE (temps = le plus lent, pas la somme)
-    const [subs, charges, disputes, invoices, bts, claudeUsd, falUsd, openaiUsd, supaSignups] = await Promise.all([
+    const [subs, charges, disputes, invoices, bts, claudeUsd, falUsd, openaiUsd, supaSignups, whopData] = await Promise.all([
       paginate('subscriptions', '&status=all'),
       paginate('charges', `&created[gte]=${gte}`),
       paginate('disputes', `&created[gte]=${Math.floor(HIST)}`),
@@ -289,6 +326,7 @@ async function refresh() {
       falCostByDay(fmtD(HIST), fmtD(T.now + 2 * 86400)).catch((e) => { console.log('fal cost ERR', e && e.message); return null; }),
       openaiCostByDay(Math.floor(HIST)).catch((e) => { console.log('openai cost ERR', e && e.message); return null; }),
       supabaseSignupsByDay(HIST).catch((e) => { console.log('supabase ERR', e && e.message); return null; }),
+      whopSpendByDay(new Date(HIST * 1000).toISOString()).catch((e) => { console.log('whop ERR', e && e.message); return null; }),
     ]);
 
     // --- Abonnements / état live ---
@@ -363,11 +401,12 @@ async function refresh() {
     }
 
     // --- Coûts IA (Claude/fal/OpenAI déjà chargés) → € par jour. Fenêtres calculées plus bas, par jour Paris (comme signups & le détail par jour) → pas de double-comptage. ---
-    const claudeEurByDay = {}, falEurByDay = {}, openaiEurByDay = {};
+    const claudeEurByDay = {}, falEurByDay = {}, openaiEurByDay = {}, whopEurByDay = {};
     if (claudeUsd) for (const [day, v] of Object.entries(claudeUsd)) claudeEurByDay[day] = v * EUR_PER_USD;
     if (falUsd) for (const [day, v] of Object.entries(falUsd)) falEurByDay[day] = v * EUR_PER_USD;
     if (openaiUsd) for (const [day, v] of Object.entries(openaiUsd)) openaiEurByDay[day] = v * EUR_PER_USD;
-    const claudeWin = { today: 0, d7: 0, d30: 0 }, falWin = { today: 0, d7: 0, d30: 0 }, openaiWin = { today: 0, d7: 0, d30: 0 };
+    if (whopData && whopData.byDay) for (const [day, v] of Object.entries(whopData.byDay)) whopEurByDay[day] = v * EUR_PER_USD;
+    const claudeWin = { today: 0, d7: 0, d30: 0 }, falWin = { today: 0, d7: 0, d30: 0 }, openaiWin = { today: 0, d7: 0, d30: 0 }, whopWin = { today: 0, d7: 0, d30: 0 };
 
     // --- Coûts fixes mensuels répartis par jour/fenêtre ---
     const fixedDay = MONTHLY_TOTAL / DAYS_MO;
@@ -381,10 +420,10 @@ async function refresh() {
     for (let i = 0; i < 30; i++) {
       const key = dk(T.now - i * 86400);
       const sv = signupsByDay ? (signupsByDay[key] || 0) : 0;
-      const cv = claudeEurByDay[key] || 0, fv = falEurByDay[key] || 0, ov = openaiEurByDay[key] || 0;
-      if (i === 0) { signupsWin.today += sv; claudeWin.today += cv; falWin.today += fv; openaiWin.today += ov; }
-      if (i < 7) { signupsWin.d7 += sv; claudeWin.d7 += cv; falWin.d7 += fv; openaiWin.d7 += ov; }
-      signupsWin.d30 += sv; claudeWin.d30 += cv; falWin.d30 += fv; openaiWin.d30 += ov;
+      const cv = claudeEurByDay[key] || 0, fv = falEurByDay[key] || 0, ov = openaiEurByDay[key] || 0, wv = whopEurByDay[key] || 0;
+      if (i === 0) { signupsWin.today += sv; claudeWin.today += cv; falWin.today += fv; openaiWin.today += ov; whopWin.today += wv; }
+      if (i < 7) { signupsWin.d7 += sv; claudeWin.d7 += cv; falWin.d7 += fv; openaiWin.d7 += ov; whopWin.d7 += wv; }
+      signupsWin.d30 += sv; claudeWin.d30 += cv; falWin.d30 += fv; openaiWin.d30 += ov; whopWin.d30 += wv;
     }
     const dayAgg = {};
     const dget = (k) => (dayAgg[k] || (dayAgg[k] = { rev: 0, sales: 0, fails: 0, refund: 0, newSales: 0, newRev: 0, renews: 0, renRev: 0, disputes: 0, disputeAmt: 0, news: 0, cancels: 0 }));
@@ -423,8 +462,9 @@ async function refresh() {
         aiClaude: r2(claudeEurByDay[key] || 0),
         aiFal: r2(falEurByDay[key] || 0),
         aiOpenai: r2(openaiEurByDay[key] || 0),
+        whopCost: r2(whopEurByDay[key] || 0),
         fixedCost: r2(fixedDay),
-        margin: r2(rev - refund - dispAmt - (feeByDay[key] || 0) - (claudeEurByDay[key] || 0) - (falEurByDay[key] || 0) - (openaiEurByDay[key] || 0) - fixedDay),
+        margin: r2(rev - refund - dispAmt - (feeByDay[key] || 0) - (claudeEurByDay[key] || 0) - (falEurByDay[key] || 0) - (openaiEurByDay[key] || 0) - (whopEurByDay[key] || 0) - fixedDay),
       };
     }
 
@@ -533,8 +573,9 @@ async function refresh() {
       aiClaude: r2(claudeWin[k]),
       aiFal: r2(falWin[k]),
       aiOpenai: r2(openaiWin[k]),
+      whopCost: r2(whopWin[k]),
       fixedCost: r2(fixedWin[k]),
-      margin: r2(pay[k].rev - pay[k].refund - disp[k].amt - feeWin[k] - claudeWin[k] - falWin[k] - openaiWin[k] - fixedWin[k]),
+      margin: r2(pay[k].rev - pay[k].refund - disp[k].amt - feeWin[k] - claudeWin[k] - falWin[k] - openaiWin[k] - whopWin[k] - fixedWin[k]),
     });
 
     CACHE = {
@@ -545,6 +586,13 @@ async function refresh() {
         tunnelFunnel,
         phConnected: !!PH_KEY,
         supaConnected: !!(SUPABASE_URL && SUPABASE_KEY),
+        whop: whopData ? {
+          connected: true,
+          spentUsd: r2(whopData.spent), fundedUsd: r2(whopData.funded),
+          spentEur: r2(whopData.spent * EUR_PER_USD),
+          views: Math.round(whopData.spent / WHOP_RATE_PER_1K * 1000),
+          ratePer1k: WHOP_RATE_PER_1K,
+        } : { connected: !!WHOP_KEY },
         live: {
           mrr: Math.round(mrr), arr: Math.round(mrr * 12), arpu: +arpu.toFixed(2),
           active: active.length, canceling: canceling.length, pastDue: pastDue.length,
