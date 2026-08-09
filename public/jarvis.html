@@ -148,6 +148,15 @@ function addMsg(kind, text){
 
 // --- voix : ElevenLabs via le serveur, secours = voix du navigateur ---
 const player = new Audio();
+// Déblocage audio : au 1er toucher, on joue un silence — ensuite le navigateur autorise
+// la lecture même si la génération de la voix prend quelques secondes.
+const SILENCE = "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=";
+let unlocked = false;
+function unlock(){
+  if (unlocked) return; unlocked = true;
+  try{ player.src = SILENCE; player.play().then(()=>player.pause()).catch(()=>{}); }catch(e){}
+}
+document.addEventListener("pointerdown", unlock, { once:true, capture:true });
 player.onplay = () => setState("speaking", "Jarvis parle — touche le réacteur pour couper.");
 player.onended = () => setState(null, "À ton écoute.");
 player.onerror = () => setState(null, "Lecture audio impossible.");
@@ -164,27 +173,32 @@ function speakFallback(text){
   u.onend = () => setState(null, "À ton écoute.");
   speechSynthesis.speak(u);
 }
-async function speak(text){
+async function speak(text, readyUrl){
   stopVoice();
-  setState("thinking", "Préparation de la voix…");
   try{
-    const r = await fetch(api("/api/tts"), { method:"POST", headers:{ "content-type":"application/json" }, body: JSON.stringify({ text }) });
-    const j = await r.json();
-    if (!j.url) throw new Error(j.error || "pas d’audio");
-    player.src = j.url; await player.play();
+    let url = readyUrl;
+    if (!url){
+      setState("thinking", "Préparation de la voix…");
+      const r = await fetch(api("/api/tts"), { method:"POST", headers:{ "content-type":"application/json" }, body: JSON.stringify({ text }) });
+      const j = await r.json();
+      if (!j.url) throw new Error(j.error || "pas d’audio");
+      url = j.url;
+    }
+    player.src = url; await player.play();
   }catch(e){ speakFallback(text); }
 }
 function stopVoice(){ try{ player.pause(); player.currentTime = 0; }catch(e){} if ("speechSynthesis" in window) speechSynthesis.cancel(); }
 
 // --- cerveau ---
-let lastText = "";
+let lastText = "", lastAudio = null;
 async function getBrief(force){
   setState("thinking", "J’analyse tes chiffres…");
   try{
     const r = await fetch(api("/api/brief" + (force ? "?force=1" : "")));
     const j = await r.json();
     if (j.error) throw new Error(j.error);
-    lastText = j.text; addMsg("jv", j.text); speak(j.text);
+    lastText = j.text; lastAudio = j.audioUrl || null;
+    addMsg("jv", j.text); speak(j.text, lastAudio);
   }catch(e){ setState(null, "Erreur : " + e.message); }
 }
 async function ask(question){
@@ -216,7 +230,7 @@ $("btnMic").onclick = () => {
 
 reactor.onclick = () => {
   if (!player.paused || ("speechSynthesis" in window && speechSynthesis.speaking)){ stopVoice(); setState(null, "Coupé."); }
-  else if (lastText) speak(lastText);
+  else if (lastText) speak(lastText, lastAudio);
   else getBrief(false);
 };
 $("btnBrief").onclick = () => getBrief(false);
@@ -228,7 +242,7 @@ $("q").addEventListener("keydown", (e) => { if (e.key === "Enter"){ ask($("q").v
   try{
     const r = await fetch(api("/api/brief"));
     const j = await r.json();
-    if (j.text){ lastText = j.text; addMsg("jv", j.text); setState(null, "Briefing prêt — touche le réacteur pour l’écouter."); }
+    if (j.text){ lastText = j.text; lastAudio = j.audioUrl || null; addMsg("jv", j.text); setState(null, "Briefing prêt — touche le réacteur pour l’écouter."); }
     else setState(null, "Erreur : " + (j.error || "?"));
   }catch(e){ setState(null, "Serveur injoignable — vérifie ta connexion."); }
 })();

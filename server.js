@@ -728,40 +728,52 @@ function supaReq(method, pathq, payload) {
 const memGet = (limit) => supaReq('GET', `/rest/v1/jarvis_memory?select=day,kind,content&order=created_at.desc&limit=${limit || 20}`);
 const memAdd = (kind, content) => supaReq('POST', '/rest/v1/jarvis_memory', { kind, content: String(content).slice(0, 2000) });
 
-let BRIEF_CACHE = { day: null, text: null }; // 1 briefing par jour (coût maîtrisé) — ?force=1 pour regénérer
+let BRIEF_CACHE = { day: null, text: null, audioUrl: null }; // 1 briefing par jour (coût maîtrisé) — ?force=1 pour regénérer
 async function jarvisBrief(force) {
   const day = new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Paris' });
-  if (!force && BRIEF_CACHE.day === day && BRIEF_CACHE.text) return BRIEF_CACHE.text;
+  if (!force && BRIEF_CACHE.day === day && BRIEF_CACHE.text) return BRIEF_CACHE;
+  // Garde anti-redémarrage : au boot Render, Stripe met ~1 min à charger — ne JAMAIS briefer sur du vide
+  if (!CACHE.data || !CACHE.data.live || CACHE.loading) throw new Error('Je finis de charger tes chiffres (redémarrage du serveur) — redemande-moi dans une minute.');
   const ctx = jarvisContext();
   const journal = await memGet(15);
   const txt = await claudeAsk(`Voici les chiffres du cockpit ce matin :\n${JSON.stringify(ctx, null, 1)}\n\nTon journal (tes derniers briefings et ce que Julien t'a demandé de retenir — assure le SUIVI : si tu avais pointé un problème, dis s'il est réglé ou pas) :\n${JSON.stringify(journal || 'journal pas encore branché', null, 1)}\n\nFais-moi mon briefing du matin, à l'oral, en 60 à 90 secondes (180-250 mots) : 1 phrase d'état général, ce qui a bougé (ventes, inscrits, tendances), le suivi de ce que tu surveillais, une alerte SEULEMENT si un chiffre le justifie vraiment, puis les 2-3 priorités concrètes du jour. Uniquement le texte à lire, sans titre ni puces.`);
-  BRIEF_CACHE = { day, text: txt };
+  // Voix pré-générée : prête AVANT que Julien touche l'orbe (sinon le navigateur retombe sur la voix robot)
+  let audioUrl = null;
+  try { audioUrl = await falTTS(txt); } catch (e) { console.log('tts brief ERR', String(e && e.message || e)); }
+  BRIEF_CACHE = { day, text: txt, audioUrl };
   memAdd('brief', `[${day}] ${txt}`.slice(0, 1200)); // fire-and-forget
-  return txt;
+  return BRIEF_CACHE;
 }
 
 // --- Voix premium : ElevenLabs via fal.ai (la FAL_KEY déjà en env) — fallback = voix du navigateur côté client.
 const TTS_CACHE = new Map(); // hash du texte → url audio (évite de payer 2 fois la même lecture)
-function falTTS(text) {
+function falTTSModel(text, model) {
   return new Promise((resolve, reject) => {
-    if (!FAL_KEY) return reject(new Error('FAL_KEY absente'));
-    const key = require('crypto').createHash('md5').update(text).digest('hex');
-    if (TTS_CACHE.has(key)) return resolve(TTS_CACHE.get(key));
-    const body = JSON.stringify({ text: text.slice(0, 4800), voice: process.env.JARVIS_VOICE || 'Daniel', speed: 1.05 });
-    const req2 = https.request({ host: 'fal.run', path: '/fal-ai/elevenlabs/tts/turbo-v2.5', method: 'POST', headers: { Authorization: 'Key ' + FAL_KEY, 'Content-Type': 'application/json' } }, (r) => {
+    const body = JSON.stringify({ text: text.slice(0, 4800), voice: process.env.JARVIS_VOICE || 'Daniel', stability: 0.45, similarity_boost: 0.8, style: 0.25 });
+    const req2 = https.request({ host: 'fal.run', path: model, method: 'POST', headers: { Authorization: 'Key ' + FAL_KEY, 'Content-Type': 'application/json' } }, (r) => {
       let b = ''; r.on('data', (c) => (b += c));
       r.on('end', () => {
         try {
           const j = JSON.parse(b);
           const url = j && j.audio && j.audio.url;
-          if (!url) return reject(new Error(j.detail || j.error || 'pas d’audio renvoyé'));
-          if (TTS_CACHE.size > 40) TTS_CACHE.clear();
-          TTS_CACHE.set(key, url); resolve(url);
+          if (!url) return reject(new Error(JSON.stringify(j.detail || j.error || j).slice(0, 200)));
+          resolve(url);
         } catch (e) { reject(e); }
       });
     });
-    req2.on('error', reject); req2.setTimeout(60000, () => req2.destroy(new Error('timeout TTS'))); req2.end(body);
+    req2.on('error', reject); req2.setTimeout(90000, () => req2.destroy(new Error('timeout TTS'))); req2.end(body);
   });
+}
+async function falTTS(text) {
+  if (!FAL_KEY) throw new Error('FAL_KEY absente');
+  const key = require('crypto').createHash('md5').update(text).digest('hex');
+  if (TTS_CACHE.has(key)) return TTS_CACHE.get(key);
+  let url;
+  try { url = await falTTSModel(text, '/fal-ai/elevenlabs/tts/multilingual-v2'); } // la meilleure qualité ElevenLabs
+  catch (e) { console.log('tts multilingual ERR → turbo', String(e && e.message || e)); url = await falTTSModel(text, '/fal-ai/elevenlabs/tts/turbo-v2.5'); }
+  if (TTS_CACHE.size > 40) TTS_CACHE.clear();
+  TTS_CACHE.set(key, url);
+  return url;
 }
 
 // --- Serveur ---
@@ -786,7 +798,7 @@ const server = http.createServer((req, res) => {
   const J = { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' };
   if (q.pathname === '/api/brief') {
     jarvisBrief(q.searchParams.get('force') === '1')
-      .then((text) => { res.writeHead(200, J); res.end(JSON.stringify({ text })); })
+      .then((b) => { res.writeHead(200, J); res.end(JSON.stringify({ text: b.text, audioUrl: b.audioUrl })); })
       .catch((e) => { res.writeHead(500, J); res.end(JSON.stringify({ error: String(e && e.message || e) })); });
     return;
   }
@@ -796,6 +808,7 @@ const server = http.createServer((req, res) => {
     req.on('end', async () => {
       let qq = ''; try { qq = String(JSON.parse(body).q || '').slice(0, 500); } catch (e) {}
       if (!qq) { res.writeHead(400, J); res.end(JSON.stringify({ error: 'question vide' })); return; }
+      if (!CACHE.data || !CACHE.data.live) { res.writeHead(503, J); res.end(JSON.stringify({ error: 'Je finis de charger tes chiffres (redémarrage du serveur) — redemande-moi dans une minute.' })); return; }
       const isMem = /^\s*(retiens|souviens[- ]toi|note)\b/i.test(qq);
       if (isMem) memAdd('fact', qq.replace(/^\s*(retiens( que)?|souviens[- ]toi( que)?|note( que)?)\s*:?\s*/i, ''));
       const journal = await memGet(15);
