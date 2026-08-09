@@ -652,6 +652,72 @@ async function refresh() {
 refresh();
 setInterval(refresh, 3 * 60 * 1000);
 
+// --- 🤖 JARVIS : briefing vocal du matin + questions, propulsé par Claude ---
+const CLAUDE_KEY = process.env.CLAUDE_KEY || ''; // clé API Anthropic standard (env Render) — PAS la clé admin
+const JARVIS_LABELS = {
+  hook: "l'accueil (1er écran)", q_level: 'le 1er écran du quiz', q_content: 'le quiz contenu', q_blocker: 'le quiz blocage',
+  q_goal: 'le quiz objectif', q_niche: 'le quiz niche', signup: 'la création de compte', teaser: 'le teaser du plan',
+  loading: "l'analyse en cours", diagnostic: 'le diagnostic', potential: 'le potentiel', trends: 'les tendances',
+  q_mindset: "le quiz état d'esprit", reassure: 'la réassurance', manque: '« ce qui te manque »', pipeline: 'la machine à contenu',
+  payoff: 'le récap du plan', projection: 'la projection', revenue: 'les revenus possibles', testimonials: 'les témoignages',
+  pacte: "l'engagement", compare: "l'avant/après", plan_ready: '« ton plan est prêt »', paywall: "l'écran des prix", downsell: "l'offre -50%",
+};
+function jarvisContext() {
+  const d = CACHE.data || {};
+  const pickW = (k) => { const w = d[k] || {}; return { ventesEUR: w.rev, nouvellesVentes: w.newSales, renouvellements: w.renews, inscrits: w.signups, resiliations: w.cancels, paiementsEchoues: w.fails, margeEUR: w.margin, litiges: w.disputes }; };
+  let fuites = [];
+  const fu = d.tunnelFunnel && d.tunnelFunnel.d7;
+  if (fu && fu.steps) {
+    const SKIP = new Set(['installapp', 'notifs', 'q_frequency', 'q_plateau', 'connect', 'account_analysis', 'niche_help', 'niche_q2', 'niche_q3', 'niche_loading', 'niche_suggest']);
+    fuites = fu.steps.filter((s) => !SKIP.has(s.step) && s.drop > 0 && s.people > 0)
+      .map((s) => ({ ecran: JARVIS_LABELS[s.step] || s.step, partis: s.drop, tauxFuitePct: Math.round((s.drop / s.people) * 100) }))
+      .sort((a, b) => b.partis - a.partis).slice(0, 3);
+  }
+  return {
+    date: new Date().toLocaleDateString('fr-FR', { timeZone: 'Europe/Paris', weekday: 'long', day: 'numeric', month: 'long' }),
+    aujourdhui: pickW('today'), sept_derniers_jours: pickW('d7'), trente_derniers_jours: pickW('d30'),
+    tendances_7j_vs_7_precedents_pct: d.trends,
+    abonnesActifs: d.live && d.live.active, mrrEUR: d.live && d.live.mrr, dejaEnResiliation: d.live && d.live.canceling,
+    trafic7j: d.traffic && d.traffic.d7, couverturePostHogPct: d.quality && d.quality.d7 && d.quality.d7.coveragePct,
+    topFuitesTunnel7j: fuites,
+    whopCreateurs: d.whop,
+    referenceConversionV1Pct: 2.4,
+  };
+}
+const JARVIS_SYSTEM = `Tu es Jarvis, l'analyste business personnel de Julien, fondateur de Creatikk (creatikk.io, SaaS IA de création de contenu TikTok, ~30-50€/mois).
+Contexte : la v2 est lancée depuis le 29/07/2026. Objectif de la phase : prouver la conversion (référence V1 : 2,4% inscrit→payé) et la rétention AVANT de scaler. Levier n°1 du moment : lancer les créateurs payés aux vues (Whop, 1$/1000 vues) — tant que whopCreateurs.spentUsd = 0, ils n'ont rien posté. Le mailing (Loops) et le dunning tournent. PostHog ne voit que ~60% du trafic (adblockers) : ça ne concerne QUE les chiffres d'écrans du tunnel (à comparer entre eux). Les inscrits (Supabase), les ventes (Stripe) et donc la conversion inscrit→payé sont EXHAUSTIFS — la couverture PostHog ne les biaise pas, ne dis jamais le contraire.
+Tu parles À L'ORAL, en tutoyant, comme un bras droit brillant : direct, chaleureux, zéro jargon, zéro liste à puces. Arrondis les chiffres. Tout est en euros.`;
+function claudeAsk(userMsg, maxTokens) {
+  return new Promise((resolve, reject) => {
+    if (!CLAUDE_KEY) return reject(new Error('CLAUDE_KEY manquante (env Render)'));
+    const body = JSON.stringify({
+      model: 'claude-opus-4-8', max_tokens: maxTokens || 2500, thinking: { type: 'adaptive' },
+      system: JARVIS_SYSTEM, messages: [{ role: 'user', content: userMsg }],
+    });
+    const req2 = https.request({ host: 'api.anthropic.com', path: '/v1/messages', method: 'POST', headers: { 'x-api-key': CLAUDE_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' } }, (r) => {
+      let b = ''; r.on('data', (c) => (b += c));
+      r.on('end', () => {
+        try {
+          const j = JSON.parse(b);
+          if (j.error) return reject(new Error(j.error.message || 'erreur Claude'));
+          const txt = (j.content || []).filter((c) => c.type === 'text').map((c) => c.text).join('\n').trim();
+          resolve(txt || '(réponse vide)');
+        } catch (e) { reject(e); }
+      });
+    });
+    req2.on('error', reject); req2.setTimeout(120000, () => req2.destroy(new Error('timeout Claude'))); req2.end(body);
+  });
+}
+let BRIEF_CACHE = { day: null, text: null }; // 1 briefing par jour (coût maîtrisé) — ?force=1 pour regénérer
+async function jarvisBrief(force) {
+  const day = new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Paris' });
+  if (!force && BRIEF_CACHE.day === day && BRIEF_CACHE.text) return BRIEF_CACHE.text;
+  const ctx = jarvisContext();
+  const txt = await claudeAsk(`Voici les chiffres du cockpit ce matin :\n${JSON.stringify(ctx, null, 1)}\n\nFais-moi mon briefing du matin, à l'oral, en 60 à 90 secondes (180-250 mots) : 1 phrase d'état général, ce qui a bougé (ventes, inscrits, tendances), une alerte SEULEMENT si un chiffre le justifie vraiment, puis les 2-3 priorités concrètes du jour, et une phrase de fin motivante mais sobre. Uniquement le texte à lire, sans titre ni puces.`);
+  BRIEF_CACHE = { day, text: txt };
+  return txt;
+}
+
 // --- Serveur ---
 const COCKPIT_PASSWORD = process.env.COCKPIT_PASSWORD || '';
 const COCKPIT_TOKEN = process.env.COCKPIT_TOKEN || ''; // accès machine (digest quotidien) : /api/data?token=...
@@ -669,6 +735,25 @@ const server = http.createServer((req, res) => {
   if (q.pathname === '/api/data') {
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
     res.end(JSON.stringify({ ...CACHE, ageMs: Date.now() - CACHE.at, hasKey: !!STRIPE_KEY }));
+    return;
+  }
+  const J = { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' };
+  if (q.pathname === '/api/brief') {
+    jarvisBrief(q.searchParams.get('force') === '1')
+      .then((text) => { res.writeHead(200, J); res.end(JSON.stringify({ text })); })
+      .catch((e) => { res.writeHead(500, J); res.end(JSON.stringify({ error: String(e && e.message || e) })); });
+    return;
+  }
+  if (q.pathname === '/api/ask' && req.method === 'POST') {
+    let body = '';
+    req.on('data', (c) => { body += c; if (body.length > 10000) req.destroy(); });
+    req.on('end', () => {
+      let qq = ''; try { qq = String(JSON.parse(body).q || '').slice(0, 500); } catch (e) {}
+      if (!qq) { res.writeHead(400, J); res.end(JSON.stringify({ error: 'question vide' })); return; }
+      claudeAsk(`Chiffres actuels du cockpit :\n${JSON.stringify(jarvisContext(), null, 1)}\n\nQuestion de Julien — réponds à l'oral, 120 mots max, chiffres à l'appui, et si la donnée manque dis-le franchement : ${qq}`, 1500)
+        .then((text) => { res.writeHead(200, J); res.end(JSON.stringify({ text })); })
+        .catch((e) => { res.writeHead(500, J); res.end(JSON.stringify({ error: String(e && e.message || e) })); });
+    });
     return;
   }
   let file = req.url === '/' ? 'index.html' : req.url.replace(/^\//, '').split('?')[0];

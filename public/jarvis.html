@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Jarvis · Creatikk</title>
+<style>
+  :root{--bg:#070a1c;--bg2:#0e1330;--line:rgba(255,255,255,.09);--ink:#eef1ff;--muted:#9aa3c7;--faint:#5c6490;
+    --grad:linear-gradient(135deg,#22d3ee,#8b5cf6);--good:#2ed592;--crit:#ff5c7a}
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--bg);color:var(--ink);font:15px/1.6 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+    min-height:100vh;display:flex;flex-direction:column;align-items:center;padding:28px 18px calc(28px + env(safe-area-inset-bottom))}
+  .top{display:flex;align-items:center;gap:10px;margin-bottom:26px}
+  .top h1{font-size:19px;letter-spacing:-.3px}
+  .top h1 span{background:var(--grad);-webkit-background-clip:text;background-clip:text;color:transparent}
+  .top a{color:var(--faint);font-size:12px;text-decoration:none;border:1px solid var(--line);border-radius:99px;padding:4px 10px}
+  /* l'orbe */
+  .orb{width:150px;height:150px;border-radius:50%;cursor:pointer;position:relative;border:none;outline:none;
+    background:radial-gradient(circle at 35% 30%, rgba(34,211,238,.9), rgba(139,92,246,.85) 60%, rgba(14,19,48,1) 100%);
+    box-shadow:0 0 60px rgba(99,102,241,.45), inset 0 0 40px rgba(255,255,255,.12);transition:transform .2s}
+  .orb:active{transform:scale(.96)}
+  .orb.speaking{animation:pulse 1.6s ease-in-out infinite}
+  .orb.thinking{animation:spinGlow 1.2s linear infinite}
+  @keyframes pulse{0%,100%{box-shadow:0 0 50px rgba(99,102,241,.4), inset 0 0 40px rgba(255,255,255,.1)}50%{box-shadow:0 0 95px rgba(34,211,238,.75), inset 0 0 60px rgba(255,255,255,.2)}}
+  @keyframes spinGlow{0%{filter:hue-rotate(0deg)}100%{filter:hue-rotate(360deg)}}
+  .orb .lbl{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:34px}
+  .status{margin-top:16px;font-size:12.5px;color:var(--faint);min-height:20px;text-align:center}
+  .brief{max-width:640px;width:100%;margin-top:22px;background:var(--bg2);border:1px solid var(--line);border-radius:16px;
+    padding:18px 20px;font-size:14.5px;color:var(--muted);white-space:pre-wrap;display:none}
+  .brief.on{display:block}
+  .brief b{color:var(--ink)}
+  .row{display:flex;gap:10px;margin-top:18px;flex-wrap:wrap;justify-content:center}
+  .btn{background:var(--bg2);border:1px solid var(--line);color:var(--ink);font-size:13.5px;font-weight:600;
+    padding:10px 16px;border-radius:99px;cursor:pointer;display:flex;align-items:center;gap:7px}
+  .btn.main{background:var(--grad);border-color:transparent}
+  .btn.rec{background:rgba(255,92,122,.15);border-color:rgba(255,92,122,.5)}
+  .ask{max-width:640px;width:100%;margin-top:14px;display:flex;gap:8px}
+  .ask input{flex:1;background:var(--bg2);border:1px solid var(--line);border-radius:12px;color:var(--ink);padding:11px 14px;font-size:14px;outline:none}
+  .ask input::placeholder{color:var(--faint)}
+  .foot{margin-top:auto;padding-top:26px;font-size:11px;color:var(--faint);text-align:center;line-height:1.7}
+</style>
+</head>
+<body>
+  <div class="top">
+    <h1>🤖 Jarvis <span>Creatikk</span></h1>
+    <a href="/">← cockpit</a>
+  </div>
+
+  <button class="orb" id="orb" title="Écouter le briefing"><span class="lbl" id="orblbl">▶</span></button>
+  <div class="status" id="status">Prêt. Touche l'orbe pour ton briefing du matin.</div>
+
+  <div class="brief" id="brief"></div>
+
+  <div class="row">
+    <button class="btn main" id="btnBrief">📋 Briefing du jour</button>
+    <button class="btn" id="btnMic">🎙 Pose ta question</button>
+    <button class="btn" id="btnStop">⏹ Stop</button>
+  </div>
+  <div class="ask">
+    <input id="q" placeholder="…ou écris ta question ici (Entrée pour envoyer)">
+  </div>
+
+  <div class="foot">
+    Le briefing est généré chaque matin depuis tes vrais chiffres (Stripe · Supabase · PostHog · Whop) et lu à voix haute.<br>
+    Astuce iPhone : Raccourcis → « Ouvrir l'URL » → cette page → nomme-le « Briefing » → « Dis Siri, Briefing ».
+  </div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const orb = $("orb"), lbl = $("orblbl"), st = $("status"), briefEl = $("brief");
+let voiceFR = null;
+function pickVoice(){
+  const vs = speechSynthesis.getVoices();
+  voiceFR = vs.find(v=>/fr[-_]FR/i.test(v.lang) && /Thomas|Aur|Amelie|Amélie|Daniel|Google/i.test(v.name))
+         || vs.find(v=>/^fr/i.test(v.lang)) || null;
+}
+if ("speechSynthesis" in window){ pickVoice(); speechSynthesis.onvoiceschanged = pickVoice; }
+
+function setState(mode, msg){
+  orb.classList.remove("speaking","thinking");
+  if (mode) orb.classList.add(mode);
+  lbl.textContent = mode==="thinking" ? "…" : mode==="speaking" ? "🔊" : "▶";
+  if (msg !== undefined) st.textContent = msg;
+}
+function speak(text){
+  if (!("speechSynthesis" in window)) { setState(null, "Synthèse vocale non supportée sur ce navigateur."); return; }
+  speechSynthesis.cancel();
+  const u = new SpeechSynthesisUtterance(text);
+  u.lang = "fr-FR"; if (voiceFR) u.voice = voiceFR; u.rate = 1.02;
+  u.onstart = () => setState("speaking", "Jarvis parle… (⏹ pour couper)");
+  u.onend = () => setState(null, "Terminé. Une question ? Touche 🎙 ou écris-la.");
+  u.onerror = () => setState(null, "Lecture interrompue.");
+  speechSynthesis.speak(u);
+}
+function show(text){ briefEl.textContent = text; briefEl.classList.add("on"); }
+
+async function getBrief(force){
+  setState("thinking", "Jarvis analyse tes chiffres…");
+  try{
+    const r = await fetch("/api/brief" + (force ? "?force=1" : ""));
+    const j = await r.json();
+    if (j.error) throw new Error(j.error);
+    show(j.text); speak(j.text);
+  }catch(e){ setState(null, "Erreur : " + e.message); }
+}
+async function ask(question){
+  if (!question) return;
+  setState("thinking", "« " + question + " » — Jarvis réfléchit…");
+  try{
+    const r = await fetch("/api/ask", { method:"POST", headers:{ "content-type":"application/json" }, body: JSON.stringify({ q: question }) });
+    const j = await r.json();
+    if (j.error) throw new Error(j.error);
+    show(j.text); speak(j.text);
+  }catch(e){ setState(null, "Erreur : " + e.message); }
+}
+
+// micro (reconnaissance vocale du navigateur — Chrome/Edge ; sur iPhone utilise la dictée du clavier dans le champ texte)
+let rec = null;
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+if (SR){
+  rec = new SR(); rec.lang = "fr-FR"; rec.interimResults = false; rec.maxAlternatives = 1;
+  rec.onresult = (e) => { const t = e.results[0][0].transcript; $("q").value = t; ask(t); };
+  rec.onerror = () => setState(null, "Micro : rien entendu. Réessaie ou écris ta question.");
+  rec.onend = () => $("btnMic").classList.remove("rec");
+}
+$("btnMic").onclick = () => {
+  if (!rec){ setState(null, "Micro non supporté ici — utilise le champ texte (ou la dictée du clavier iPhone)."); $("q").focus(); return; }
+  speechSynthesis.cancel(); $("btnMic").classList.add("rec"); setState("thinking", "Je t'écoute…"); rec.start();
+};
+orb.onclick = () => { if (speechSynthesis.speaking){ speechSynthesis.cancel(); setState(null, "Coupé."); } else if (briefEl.textContent){ speak(briefEl.textContent); } else { getBrief(false); } };
+$("btnBrief").onclick = () => getBrief(false);
+$("btnStop").onclick = () => { speechSynthesis.cancel(); setState(null, "Coupé."); };
+$("q").addEventListener("keydown", (e) => { if (e.key === "Enter"){ ask($("q").value.trim()); $("q").value = ""; } });
+
+// pré-charge le briefing (texte affiché direct ; la voix attend un geste — règle iOS/Chrome)
+(async () => {
+  try{
+    const r = await fetch("/api/brief"); const j = await r.json();
+    if (j.text){ show(j.text); setState(null, "Briefing prêt — touche l'orbe pour l'écouter."); }
+    else if (j.error){ setState(null, "Erreur : " + j.error); }
+  }catch(e){ setState(null, "Serveur injoignable."); }
+})();
+</script>
+</body>
+</html>
