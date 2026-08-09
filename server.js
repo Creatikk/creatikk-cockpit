@@ -681,12 +681,16 @@ function jarvisContext() {
     trafic7j: d.traffic && d.traffic.d7, couverturePostHogPct: d.quality && d.quality.d7 && d.quality.d7.coveragePct,
     topFuitesTunnel7j: fuites,
     whopCreateurs: d.whop,
-    referenceConversionV1Pct: 2.4,
+    repartitionFormules: (d.planMix || []).slice(0, 6),
+    retentionCohortesMensuellesPct: d.cohorts,
+    ventesParJour_30j: Object.fromEntries(Object.entries(d.days || {}).slice(-30).map(([k, v]) => [k, { ventesEUR: v.rev, nouvelles: v.newSales, inscrits: v.signups }])),
+    baselineV1_avant_v2: { conversionInscritPayePct: 2.4, churnMensuelPct: 41, ltvEUR: 15, revenus6moisEUR: 115000, note: 'mesures Stripe/cockpit de juillet 2026 — la v2 (lancée le 29/07) doit faire mieux' },
   };
 }
 const JARVIS_SYSTEM = `Tu es Jarvis, l'analyste business personnel de Julien, fondateur de Creatikk (creatikk.io, SaaS IA de création de contenu TikTok, ~30-50€/mois).
 Contexte : la v2 est lancée depuis le 29/07/2026. Objectif de la phase : prouver la conversion (référence V1 : 2,4% inscrit→payé) et la rétention AVANT de scaler. Levier n°1 du moment : lancer les créateurs payés aux vues (Whop, 1$/1000 vues) — tant que whopCreateurs.spentUsd = 0, ils n'ont rien posté. Le mailing (Loops) et le dunning tournent. PostHog ne voit que ~60% du trafic (adblockers) : ça ne concerne QUE les chiffres d'écrans du tunnel (à comparer entre eux). Les inscrits (Supabase), les ventes (Stripe) et donc la conversion inscrit→payé sont EXHAUSTIFS — la couverture PostHog ne les biaise pas, ne dis jamais le contraire.
-Tu parles À L'ORAL, en tutoyant, comme un bras droit brillant : direct, chaleureux, zéro jargon, zéro liste à puces. Arrondis les chiffres. Tout est en euros.`;
+Tu disposes de TOUT l'historique utile : fenêtres aujourd'hui/7j/30j, ventes jour par jour sur 30 jours, rétention par cohorte mensuelle, répartition des formules, la baseline V1 complète (avant la v2), et ton JOURNAL persistant (tes briefings passés + ce que Julien t'a demandé de retenir). Ne dis JAMAIS que tu es limité à deux semaines ou que tu manques d'historique — si une donnée précise manque vraiment, nomme-la et propose de la brancher au cockpit.
+Tu parles À L'ORAL, en tutoyant, comme un bras droit brillant : direct, chaleureux, zéro jargon, zéro liste à puces. Arrondis les chiffres. Tout est en euros. Ta mission : faire gagner de l'argent à Julien — chaque réponse finit sur ce qui a le plus d'impact.`;
 function claudeAsk(userMsg, maxTokens) {
   return new Promise((resolve, reject) => {
     if (!CLAUDE_KEY) return reject(new Error('CLAUDE_KEY manquante (env Render)'));
@@ -708,14 +712,56 @@ function claudeAsk(userMsg, maxTokens) {
     req2.on('error', reject); req2.setTimeout(120000, () => req2.destroy(new Error('timeout Claude'))); req2.end(body);
   });
 }
+// --- Mémoire perpétuelle de Jarvis (table Supabase jarvis_memory — créée par Julien via le SQL fourni).
+// Robuste : si la table n'existe pas encore, tout continue sans mémoire.
+function supaReq(method, pathq, payload) {
+  return new Promise((resolve, reject) => {
+    if (!SUPABASE_URL || !SUPABASE_KEY) return resolve(null);
+    const u = new URL(SUPABASE_URL + pathq);
+    const req2 = https.request({ host: u.host, path: u.pathname + u.search, method, headers: { apikey: SUPABASE_KEY, Authorization: 'Bearer ' + SUPABASE_KEY, 'Content-Type': 'application/json', Prefer: 'return=minimal' } }, (r) => {
+      let b = ''; r.on('data', (c) => (b += c));
+      r.on('end', () => { if (r.statusCode >= 400) return resolve(null); try { resolve(b ? JSON.parse(b) : true); } catch (e) { resolve(true); } });
+    });
+    req2.on('error', () => resolve(null)); req2.setTimeout(15000, () => req2.destroy()); req2.end(payload ? JSON.stringify(payload) : undefined);
+  });
+}
+const memGet = (limit) => supaReq('GET', `/rest/v1/jarvis_memory?select=day,kind,content&order=created_at.desc&limit=${limit || 20}`);
+const memAdd = (kind, content) => supaReq('POST', '/rest/v1/jarvis_memory', { kind, content: String(content).slice(0, 2000) });
+
 let BRIEF_CACHE = { day: null, text: null }; // 1 briefing par jour (coût maîtrisé) — ?force=1 pour regénérer
 async function jarvisBrief(force) {
   const day = new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Paris' });
   if (!force && BRIEF_CACHE.day === day && BRIEF_CACHE.text) return BRIEF_CACHE.text;
   const ctx = jarvisContext();
-  const txt = await claudeAsk(`Voici les chiffres du cockpit ce matin :\n${JSON.stringify(ctx, null, 1)}\n\nFais-moi mon briefing du matin, à l'oral, en 60 à 90 secondes (180-250 mots) : 1 phrase d'état général, ce qui a bougé (ventes, inscrits, tendances), une alerte SEULEMENT si un chiffre le justifie vraiment, puis les 2-3 priorités concrètes du jour, et une phrase de fin motivante mais sobre. Uniquement le texte à lire, sans titre ni puces.`);
+  const journal = await memGet(15);
+  const txt = await claudeAsk(`Voici les chiffres du cockpit ce matin :\n${JSON.stringify(ctx, null, 1)}\n\nTon journal (tes derniers briefings et ce que Julien t'a demandé de retenir — assure le SUIVI : si tu avais pointé un problème, dis s'il est réglé ou pas) :\n${JSON.stringify(journal || 'journal pas encore branché', null, 1)}\n\nFais-moi mon briefing du matin, à l'oral, en 60 à 90 secondes (180-250 mots) : 1 phrase d'état général, ce qui a bougé (ventes, inscrits, tendances), le suivi de ce que tu surveillais, une alerte SEULEMENT si un chiffre le justifie vraiment, puis les 2-3 priorités concrètes du jour. Uniquement le texte à lire, sans titre ni puces.`);
   BRIEF_CACHE = { day, text: txt };
+  memAdd('brief', `[${day}] ${txt}`.slice(0, 1200)); // fire-and-forget
   return txt;
+}
+
+// --- Voix premium : ElevenLabs via fal.ai (la FAL_KEY déjà en env) — fallback = voix du navigateur côté client.
+const TTS_CACHE = new Map(); // hash du texte → url audio (évite de payer 2 fois la même lecture)
+function falTTS(text) {
+  return new Promise((resolve, reject) => {
+    if (!FAL_KEY) return reject(new Error('FAL_KEY absente'));
+    const key = require('crypto').createHash('md5').update(text).digest('hex');
+    if (TTS_CACHE.has(key)) return resolve(TTS_CACHE.get(key));
+    const body = JSON.stringify({ text: text.slice(0, 4800), voice: process.env.JARVIS_VOICE || 'Daniel', speed: 1.05 });
+    const req2 = https.request({ host: 'fal.run', path: '/fal-ai/elevenlabs/tts/turbo-v2.5', method: 'POST', headers: { Authorization: 'Key ' + FAL_KEY, 'Content-Type': 'application/json' } }, (r) => {
+      let b = ''; r.on('data', (c) => (b += c));
+      r.on('end', () => {
+        try {
+          const j = JSON.parse(b);
+          const url = j && j.audio && j.audio.url;
+          if (!url) return reject(new Error(j.detail || j.error || 'pas d’audio renvoyé'));
+          if (TTS_CACHE.size > 40) TTS_CACHE.clear();
+          TTS_CACHE.set(key, url); resolve(url);
+        } catch (e) { reject(e); }
+      });
+    });
+    req2.on('error', reject); req2.setTimeout(60000, () => req2.destroy(new Error('timeout TTS'))); req2.end(body);
+  });
 }
 
 // --- Serveur ---
@@ -747,11 +793,26 @@ const server = http.createServer((req, res) => {
   if (q.pathname === '/api/ask' && req.method === 'POST') {
     let body = '';
     req.on('data', (c) => { body += c; if (body.length > 10000) req.destroy(); });
-    req.on('end', () => {
+    req.on('end', async () => {
       let qq = ''; try { qq = String(JSON.parse(body).q || '').slice(0, 500); } catch (e) {}
       if (!qq) { res.writeHead(400, J); res.end(JSON.stringify({ error: 'question vide' })); return; }
-      claudeAsk(`Chiffres actuels du cockpit :\n${JSON.stringify(jarvisContext(), null, 1)}\n\nQuestion de Julien — réponds à l'oral, 120 mots max, chiffres à l'appui, et si la donnée manque dis-le franchement : ${qq}`, 1500)
+      const isMem = /^\s*(retiens|souviens[- ]toi|note)\b/i.test(qq);
+      if (isMem) memAdd('fact', qq.replace(/^\s*(retiens( que)?|souviens[- ]toi( que)?|note( que)?)\s*:?\s*/i, ''));
+      const journal = await memGet(15);
+      claudeAsk(`Chiffres actuels du cockpit :\n${JSON.stringify(jarvisContext(), null, 1)}\n\nTon journal (briefings passés + faits que Julien t'a demandé de retenir) :\n${JSON.stringify(journal || 'journal pas encore branché', null, 1)}\n\n${isMem ? "Julien vient de te demander de RETENIR quelque chose — c'est enregistré dans ton journal, confirme-le en une phrase puis commente si utile." : "Question de Julien — réponds à l'oral, 120 mots max, chiffres à l'appui :"} ${qq}`, 1500)
         .then((text) => { res.writeHead(200, J); res.end(JSON.stringify({ text })); })
+        .catch((e) => { res.writeHead(500, J); res.end(JSON.stringify({ error: String(e && e.message || e) })); });
+    });
+    return;
+  }
+  if (q.pathname === '/api/tts' && req.method === 'POST') {
+    let body = '';
+    req.on('data', (c) => { body += c; if (body.length > 30000) req.destroy(); });
+    req.on('end', () => {
+      let t = ''; try { t = String(JSON.parse(body).text || ''); } catch (e) {}
+      if (!t) { res.writeHead(400, J); res.end(JSON.stringify({ error: 'texte vide' })); return; }
+      falTTS(t)
+        .then((url) => { res.writeHead(200, J); res.end(JSON.stringify({ url })); })
         .catch((e) => { res.writeHead(500, J); res.end(JSON.stringify({ error: String(e && e.message || e) })); });
     });
     return;

@@ -1,0 +1,11 @@
+{
+  "name": "Jarvis Creatikk",
+  "short_name": "Jarvis",
+  "description": "Ton bras droit business — briefing vocal et questions sur tes vrais chiffres.",
+  "display": "standalone",
+  "background_color": "#04060f",
+  "theme_color": "#04060f",
+  "icons": [
+    { "src": "/jarvis-icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}
