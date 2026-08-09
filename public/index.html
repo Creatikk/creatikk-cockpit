@@ -112,6 +112,10 @@
   .mf .p{font-size:9.5px;color:var(--faint);margin-top:2px}
   .mf.good{border-color:rgba(46,213,146,.45);background:rgba(46,213,146,.07)}
   .mf.good .n{color:var(--good)}
+  .mf.real{border-style:solid;border-color:rgba(246,181,61,.35)}
+  .mfhead{font-size:11px;font-weight:700;color:var(--muted);margin:10px 0 6px;letter-spacing:.2px}
+  .mfhead em{font-style:normal;font-weight:500;color:var(--faint)}
+  .mfhead.real{margin-top:12px}
   .mfa{align-self:center;color:var(--faint);font-size:14px}
   @media(max-width:700px){.megafun{flex-wrap:wrap}.mf{flex:1 1 28%}.mfa{display:none}}
   .fb .pct{text-decoration:none;font-size:10.5px;color:var(--faint);font-variant-numeric:tabular-nums}
@@ -250,25 +254,41 @@ function render(d){
       }
       const entered = funPath==='deb' ? (fu.pathDeb||0) : funPath==='pro' ? (fu.pathPro||0) : ((fu.pathDeb||0) + (fu.pathPro||0));
       const connectSeen = (fu.steps.find(s=>s.step==='connect')||{}), analyzed = (fu.steps.find(s=>s.step==='account_analysis')||{});
-      // La frise des 5 étapes business (toujours sur TOUT le monde, chiffres réels Stripe/Supabase de la fenêtre)
+      // FRISE « PARCOURS » : 100% PostHog (comparable écran à écran — jamais mélangé aux totaux réels)
       const allEntered = (fu.pathDeb||0)+(fu.pathPro||0);
       const stageN = (id)=>{ const s=byId[id]; return s ? (s.people||0) : 0; };
       const wBiz = d[win]||{};
+      // Couverture PostHog (part du réel que le tracking voit — les adblockers cachent le reste)
+      const covQ = (d.quality && d.quality[win]) || null;
+      const cov = covQ && covQ.coveragePct ? covQ.coveragePct
+                : (wBiz.signups && stageN('signup') ? Math.min(100, Math.round(stageN('signup')/wBiz.signups*100)) : null);
+      const estEntered = cov ? Math.round(allEntered*100/cov) : null;
       const stages = [
         {ic:'🚪', lab:'Entrent', n:allEntered},
         {ic:'📝', lab:'Font le quiz', n:stageN('q_level')},
-        {ic:'👤', lab:'Créent un compte', n:wBiz.signups||0},
+        {ic:'👤', lab:'Créent un compte', n:stageN('signup')},
         {ic:'💳', lab:'Voient les prix', n:stageN('paywall')},
-        {ic:'💰', lab:'PAIENT', n:wBiz.newSales||0, good:true},
       ];
-      const megafun = `<div class="megafun">${stages.map((s,i)=>{
+      // BANDE « RÉALITÉ » : les totaux exhaustifs (Stripe/Supabase) + la vraie conversion
+      const convReal = wBiz.signups ? (wBiz.newSales/wBiz.signups*100) : null;
+      const megafun = `
+      <div class="mfhead">📡 Le parcours, écran par écran <em>PostHog · ${cov?`ne voit que ~${cov}% des gens (bloqueurs de pub)`:'part du réel inconnue'}</em></div>
+      <div class="megafun">${stages.map((s,i)=>{
         const p = allEntered ? Math.round(s.n/allEntered*100) : 0;
-        return `${i?'<span class="mfa">→</span>':''}<div class="mf ${s.good?'good':''}"><div class="ic">${s.ic}</div><div class="n tnum">${F.format(s.n)}</div><div class="l">${s.lab}</div><div class="p">${i?p+'% des entrés':'&nbsp;'}</div></div>`;
+        return `${i?'<span class="mfa">→</span>':''}<div class="mf"><div class="ic">${s.ic}</div><div class="n tnum">${F.format(s.n)}</div><div class="l">${s.lab}</div><div class="p">${i?p+'% des entrés':'&nbsp;'}</div></div>`;
       }).join('')}</div>
-      <div style="font-size:11px;color:var(--faint);margin:6px 0 14px">Les 5 étapes qui comptent, sur ${winLabel(win)} : de l'entrée au PAIEMENT (💰 = vraies ventes Stripe, 👤 = vrais comptes Supabase). Le détail écran par écran est en dessous.</div>`;
+      <div class="mfhead real">✅ La réalité, tout le monde compté <em>Stripe &amp; Supabase · totaux exhaustifs</em></div>
+      <div class="megafun">
+        <div class="mf real"><div class="ic">👤</div><div class="n tnum">${F.format(wBiz.signups||0)}</div><div class="l">Vrais comptes créés</div><div class="p">Supabase${estEntered?` · ≈${F.format(estEntered)} vrais entrants`:''}</div></div>
+        <span class="mfa">→</span>
+        <div class="mf real good"><div class="ic">💰</div><div class="n tnum">${F.format(wBiz.newSales||0)}</div><div class="l">PAIENT</div><div class="p">Stripe · vraies ventes</div></div>
+        <span class="mfa">=</span>
+        <div class="mf real ${convReal!==null&&convReal>=2.4?'good':''}"><div class="ic">🎯</div><div class="n tnum">${convReal!==null?convReal.toFixed(1).replace('.',',')+'%':'—'}</div><div class="l">Conversion inscrit → payé</div><div class="p">réf. V1 : 2,4%</div></div>
+      </div>
+      <div style="font-size:11px;color:var(--faint);margin:6px 0 14px">2 lignes, 2 rôles : la frise 📡 compare les écrans entre eux (même source partout, donc les % sont justes) — la bande ✅ donne les vrais totaux et LA conversion qui compte. Ne jamais diviser un chiffre d'une ligne par un chiffre de l'autre.</div>`;
       trafficHtml += `
       <div class="panel">
-        <h3>🚪 Le tunnel : de l'entrée au paiement <em>${F.format(wBiz.newSales||0)} payé${(wBiz.newSales||0)>1?'s':''} sur ${F.format(allEntered)} entrés${leak&&leak.n?` · fuite n°1 : ${leak.label}`:''}</em></h3>
+        <h3>🚪 Le tunnel : de l'entrée au paiement <em>${F.format(wBiz.newSales||0)} payé${(wBiz.newSales||0)>1?'s':''} sur ${F.format(wBiz.signups||0)} vrais comptes${leak&&leak.n?` · fuite n°1 : ${leak.label}`:''}</em></h3>
         ${megafun}
         <div class="funchips">
           <button data-fp="all" class="${funPath==='all'?'on':''}">Tous (${F.format((fu.pathDeb||0)+(fu.pathPro||0))})</button>
@@ -286,7 +306,7 @@ function render(d){
             <span class="fb"><i style="width:${Math.max(2,Math.round(n/maxSeen*100))}%"></i><b>${F.format(n)}</b>${br?'':`<u class="pct">${pct}%</u>`}</span>
             <span class="fd">${isEnd?(dr?`<b style="color:var(--good)">✅ ${F.format(dr)}</b>`:'·'):(dr?`<b>−${F.format(dr)}</b>`:'·')}</span>
           </div>`;}).join('')}
-        <div style="font-size:11px;color:var(--faint);margin-top:10px">Se lit de haut en bas : à chaque écran, combien de personnes sont encore là (le % = par rapport aux entrés). « Partis ici » = dernier écran vu avant d'abandonner · ✅ = ont atteint le tout dernier écran (l'installation de l'app — payants ou non). <b style="color:var(--muted)">Le vrai objectif, c'est la case 💰 PAIENT de la frise au-dessus.</b> La <b style="color:var(--crit)">ligne rouge</b> = ta plus grosse fuite, l'écran à retravailler en priorité. Le bouton « écrans de branche » affiche les étapes que seule une partie des gens voit (aide niche, parcours « je poste déjà »).</div>
+        <div style="font-size:11px;color:var(--faint);margin-top:10px">Se lit de haut en bas : à chaque écran, combien de personnes sont encore là (le % = par rapport aux entrés). « Partis ici » = dernier écran vu avant d'abandonner · ✅ = ont atteint le tout dernier écran (l'installation de l'app — payants ou non). <b style="color:var(--muted)">Le vrai objectif, c'est la case 💰 PAIENT de la bande ✅ Réalité au-dessus.</b> La <b style="color:var(--crit)">ligne rouge</b> = ta plus grosse fuite, l'écran à retravailler en priorité. Le bouton « écrans de branche » affiche les étapes que seule une partie des gens voit (aide niche, parcours « je poste déjà »).</div>
       </div>`;
     }
   }

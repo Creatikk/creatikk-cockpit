@@ -556,6 +556,16 @@ async function refresh() {
       } catch (e) { console.log('posthog ERR', String(e && e.message || e)); }
     }
 
+    // Couverture PostHog = écran "création de compte" vu (PostHog) ÷ vrais comptes (Supabase).
+    // Mesure l'angle mort des bloqueurs de pub — sert aux audits : les % PostHog ne couvrent que cette fraction du réel.
+    const quality = {};
+    for (const k of ['today', 'd7', 'd30']) {
+      const fu = tunnelFunnel && tunnelFunnel[k];
+      const seen = fu && fu.steps ? ((fu.steps.find((s) => s.step === 'signup') || {}).people || 0) : 0;
+      const real = signupsWin[k] || 0;
+      quality[k] = { phSignupSeen: seen, supaSignups: real, coveragePct: seen && real ? Math.min(100, Math.round((seen / real) * 100)) : null };
+    }
+
     const winData = (k, from) => ({
       rev: r2(pay[k].rev),
       sales: pay[k].ok,
@@ -584,6 +594,7 @@ async function refresh() {
         traffic,
         trafficDays,
         tunnelFunnel,
+        quality,
         phConnected: !!PH_KEY,
         supaConnected: !!(SUPABASE_URL && SUPABASE_KEY),
         whop: whopData ? {
