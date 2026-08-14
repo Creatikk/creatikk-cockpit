@@ -154,7 +154,7 @@ async function phDropsByDay() {
   const rows = await phQuery(`SELECT toString(toDate(toTimeZone(t.start, 'Europe/Paris'))) AS d, t.last_step AS step, count() AS n
     FROM (SELECT person_id, min(timestamp) AS start, argMax(properties.step, timestamp) AS last_step
           FROM events WHERE ${base} GROUP BY person_id) AS t
-    GROUP BY d, step ORDER BY d`);
+    GROUP BY d, step ORDER BY d LIMIT 5000`); // sans LIMIT explicite, HogQL tronque à 100 lignes (jours × écrans > 100)
   return (rows || []).map((r) => ({ d: r[0], step: r[1], n: +r[2] || 0 }));
 }
 
