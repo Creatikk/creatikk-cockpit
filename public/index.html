@@ -254,6 +254,39 @@ function render(d){
     </div>
     <div style="font-size:11px;color:var(--faint);margin-top:8px">PostHog · uniquement le vrai site (creatikk.io) — les tests (dev/localhost) sont exclus.</div>`;
 
+    // 🧭 D'où viennent les visiteurs (référents + liens UTM créateurs) — fenêtres today/d7 seulement
+    const srcW = (win==='today'||win==='d7') ? (d.sources && d.sources[win]) : null;
+    if (srcW && ((srcW.referrers||[]).length || (srcW.utm||[]).length)){
+      const maxV = Math.max(1, ...(srcW.referrers||[]).map(r=>r.visitors));
+      const prettySrc = (s)=>{
+        if (/tiktok/i.test(s)) return '🎵 TikTok';
+        if (/instagram/i.test(s)) return '📸 Instagram';
+        if (/google/i.test(s)) return '🔎 Google';
+        if (/facebook|fb\./i.test(s)) return '📘 Facebook';
+        if (/youtube/i.test(s)) return '▶️ YouTube';
+        if (/snapchat/i.test(s)) return '👻 Snapchat';
+        if (/direct/i.test(s)) return '🔗 Direct / interne';
+        return s;
+      };
+      const rows = (srcW.referrers||[]).map(r=>`
+        <div class="funrow" style="grid-template-columns:170px 1fr 70px;display:grid;gap:10px;align-items:center">
+          <span class="fl" title="${r.src}">${prettySrc(r.src)}</span>
+          <span class="fb"><i style="width:${Math.max(2,Math.round(r.visitors/maxV*100))}%"></i><b>${F.format(r.visitors)}</b></span>
+          <span style="font-size:11px;color:var(--faint);text-align:right">${F.format(r.views)} vues</span>
+        </div>`).join('');
+      const utmRows = (srcW.utm||[]).length
+        ? (srcW.utm||[]).map(u=>`<span style="display:inline-block;background:var(--bg2);border:1px solid var(--line);border-radius:99px;padding:4px 11px;margin:3px 4px 0 0;font-size:11.5px;color:var(--muted)">${u.src} · <b style="color:var(--ink)">${F.format(u.visitors)}</b></span>`).join('')
+        : `<span style="font-size:11.5px;color:var(--faint)">aucun lien tagué vu pour l'instant — donne à chaque créateur son lien <b style="color:var(--muted)">creatikk.io/?utm_source=whop&amp;utm_campaign=pseudo</b> pour mesurer son trafic ici.</span>`;
+      trafficHtml += `
+      <div class="panel">
+        <h3>🧭 D'où viennent tes visiteurs <em>${winLabel(win)} · par domaine d'origine</em></h3>
+        ${rows || '<div style="font-size:12px;color:var(--faint)">pas encore de données</div>'}
+        <div style="font-size:11.5px;font-weight:700;color:var(--muted);margin:12px 0 4px">🏷 Liens créateurs (UTM)</div>
+        ${utmRows}
+        <div style="font-size:11px;color:var(--faint);margin-top:10px">« Direct / interne » = adresse tapée, lien en bio TikTok sans étiquette, ou navigation dans le site. Quand tes créateurs Whop posteront avec leurs liens tagués, leur trafic apparaîtra nommément dans les étiquettes 🏷 ci-dessus.</div>
+      </div>`;
+    }
+
     // Funnel écran par écran (fenêtres seulement, pas de détail par jour). Ordre = mesuré côté serveur.
     const fu = (!dayMode && d.tunnelFunnel) ? d.tunnelFunnel[win] : null;
     if (fu && (fu.steps||[]).length){

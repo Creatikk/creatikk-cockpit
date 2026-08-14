@@ -119,6 +119,23 @@ async function phTraffic(windowClause) {
   return { visits: +row[0] || 0, visitors: +row[1] || 0, tunnelStart: +row[2] || 0, reachedProduct: +row[3] || 0, firstVideo: +row[4] || 0 };
 }
 
+// --- D'où viennent les visiteurs : domaine référent + utm_source (les liens créateurs Whop).
+// Sert à mesurer le canal créateurs : même sans UTM, un clic depuis TikTok donne $referring_domain=tiktok.com.
+async function phSources(windowClause) {
+  const base = `event='$pageview' AND ${PH_HOST_FILTER} AND (${windowClause})`;
+  const refs = await phQuery(`SELECT
+      if(properties.$referring_domain IS NULL OR properties.$referring_domain = '' OR properties.$referring_domain LIKE '%creatikk.io%', 'direct / interne', properties.$referring_domain) AS src,
+      uniq(person_id) AS visitors, count() AS views
+    FROM events WHERE ${base} GROUP BY src ORDER BY visitors DESC LIMIT 12`);
+  const utm = await phQuery(`SELECT concat(toString(properties.utm_source), if(properties.utm_campaign IS NOT NULL AND toString(properties.utm_campaign) != '', concat(' · ', toString(properties.utm_campaign)), '')) AS src,
+      uniq(person_id) AS visitors
+    FROM events WHERE ${base} AND properties.utm_source IS NOT NULL AND toString(properties.utm_source) != '' GROUP BY src ORDER BY visitors DESC LIMIT 12`);
+  return {
+    referrers: (refs || []).map((r) => ({ src: r[0], visitors: +r[1] || 0, views: +r[2] || 0 })),
+    utm: (utm || []).map((r) => ({ src: r[0], visitors: +r[1] || 0 })),
+  };
+}
+
 // --- Funnel tunnel : chaque écran dans son ordre RÉEL (mesuré : temps moyen depuis l'entrée),
 // combien le voient (total + par parcours debutant/pro), et où chaque personne S'ARRÊTE (dernier écran vu).
 async function phTunnel(windowClause) {
@@ -545,10 +562,10 @@ async function refresh() {
     const planMix = Object.values(planMap).sort((a, b) => b.mrr - a.mrr).map((p) => ({ label: p.label, count: p.count, mrr: Math.round(p.mrr) }));
 
     // --- Trafic PostHog (non bloquant : si ça échoue, Stripe reste servi) ---
-    let traffic = null, trafficDays = null, tunnelFunnel = null, dropsByDay = null;
+    let traffic = null, trafficDays = null, tunnelFunnel = null, dropsByDay = null, sources = null;
     if (PH_KEY) {
       try {
-        const [tToday, t7, t30, fToday, f7, f30, dbd] = await Promise.all([
+        const [tToday, t7, t30, fToday, f7, f30, dbd, srcToday, src7] = await Promise.all([
           phTraffic("timestamp >= toStartOfDay(now(), 'Europe/Paris')"),
           phTraffic('timestamp > now() - interval 7 day'),
           phTraffic('timestamp > now() - interval 30 day'),
@@ -556,10 +573,13 @@ async function refresh() {
           phTunnel('timestamp > now() - interval 7 day').catch((e) => { console.log('funnel d7 ERR', String(e && e.message || e)); return null; }),
           phTunnel('timestamp > now() - interval 30 day').catch((e) => { console.log('funnel d30 ERR', String(e && e.message || e)); return null; }),
           phDropsByDay().catch((e) => { console.log('dropsByDay ERR', String(e && e.message || e)); return null; }),
+          phSources("timestamp >= toStartOfDay(now(), 'Europe/Paris')").catch((e) => { console.log('sources today ERR', String(e && e.message || e)); return null; }),
+          phSources('timestamp > now() - interval 7 day').catch((e) => { console.log('sources d7 ERR', String(e && e.message || e)); return null; }),
         ]);
         traffic = { today: tToday, d7: t7, d30: t30 };
         tunnelFunnel = { today: fToday, d7: f7, d30: f30 };
         dropsByDay = dbd;
+        sources = { today: srcToday, d7: src7 };
         const rows = await phQuery(`SELECT toString(toDate(toTimeZone(timestamp, 'Europe/Paris'))) AS d,
             countIf(event='$pageview') AS v, uniqIf(person_id, event='$pageview') AS vi,
             countIf(event='tunnel_started') AS ts, countIf(event='dashboard_opened') AS rp, countIf(event='first_video_created') AS fv
@@ -608,6 +628,7 @@ async function refresh() {
         trafficDays,
         tunnelFunnel,
         dropsByDay,
+        sources,
         quality,
         phConnected: !!PH_KEY,
         supaConnected: !!(SUPABASE_URL && SUPABASE_KEY),
