@@ -673,6 +673,32 @@ async function refresh() {
 refresh();
 setInterval(refresh, 3 * 60 * 1000);
 
+// --- Emails clients Stripe (liste d'exclusion pour la purge Loops : ne JAMAIS toucher un client) ---
+let CUST_EMAILS = { at: 0, all: [], active: [] };
+async function stripeCustomerEmails() {
+  if (Date.now() - CUST_EMAILS.at < 3600e3 && CUST_EMAILS.all.length) return CUST_EMAILS;
+  const all = new Set();
+  let url = 'customers?limit=100';
+  for (let i = 0; i < 80; i++) {
+    const page = await stripeGet(url);
+    for (const c of page.data || []) if (c.email) all.add(String(c.email).toLowerCase());
+    if (!page.has_more || !(page.data || []).length) break;
+    url = `customers?limit=100&starting_after=${page.data[page.data.length - 1].id}`;
+  }
+  const active = new Set();
+  for (const status of ['active', 'past_due', 'trialing']) {
+    let surl = `subscriptions?limit=100&status=${status}&expand[]=data.customer`;
+    for (let i = 0; i < 30; i++) {
+      const page = await stripeGet(surl);
+      for (const s of page.data || []) { const e = s.customer && s.customer.email; if (e) active.add(String(e).toLowerCase()); }
+      if (!page.has_more || !(page.data || []).length) break;
+      surl = `subscriptions?limit=100&status=${status}&expand[]=data.customer&starting_after=${page.data[page.data.length - 1].id}`;
+    }
+  }
+  CUST_EMAILS = { at: Date.now(), all: [...all], active: [...active] };
+  return CUST_EMAILS;
+}
+
 // --- 🤖 JARVIS : briefing vocal du matin + questions, propulsé par Claude ---
 const CLAUDE_KEY = process.env.CLAUDE_KEY || ''; // clé API Anthropic standard (env Render) — PAS la clé admin
 const JARVIS_LABELS = {
@@ -817,6 +843,12 @@ const server = http.createServer((req, res) => {
     return;
   }
   const J = { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' };
+  if (q.pathname === '/api/emails') {
+    stripeCustomerEmails()
+      .then((r) => { res.writeHead(200, J); res.end(JSON.stringify({ all: r.all, active: r.active, nAll: r.all.length, nActive: r.active.length })); })
+      .catch((e) => { res.writeHead(500, J); res.end(JSON.stringify({ error: String(e && e.message || e) })); });
+    return;
+  }
   if (q.pathname === '/api/brief') {
     jarvisBrief(q.searchParams.get('force') === '1')
       .then((b) => { res.writeHead(200, J); res.end(JSON.stringify({ text: b.text, audioUrl: b.audioUrl })); })
